@@ -136,22 +136,26 @@ async function getLoggedInUser(req, res) {
 async function logout(req, res) {
     req.session.destroy((err) => {
         if (err) {
-            return res.status(302).json({
+            console.log("[logout] Xoa session that bai ! Error : ", err);
+            return res.status(500).json({
                 success: false,
                 message: err
             });
         }
 
-        res.clearCookie(
-            "vietpeace.customer.sid",
+        console.log("[logout] Xoa session thanh cong !");
+
+        console.log("[logout] Xoa cookie vietpeace.customer.sid !");
+        res.clearCookie("vietpeace.customer.sid",
             {
                 path: "/api/web",
             }
         );
 
-        return res.json({
+        console.log("[logout] Return voi status code 200 & message thong bao logout thanh cong !");
+        return res.status(200).json({
             success: true,
-            message: "Đăng xuất thành công",
+            message: "Đăng xuất customer khỏi web thành công",
         });
     });
 }
