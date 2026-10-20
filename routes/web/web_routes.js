@@ -41,5 +41,13 @@ const accommodationRoutes = require("./accommodation_web_routes");
 router.use("/accommodations", accommodationRoutes);
 
 
+
+/**
+ * [PUBLIC APIS] Các API để test 
+ */
+const testApiRoutes = require("./testapi_web_routes");
+router.use("/test", testApiRoutes);
+
+
 // export
 module.exports = router;
