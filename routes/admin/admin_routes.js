@@ -25,6 +25,8 @@ router.use("/auth", authRoutes);
  */
 const accommodationAdminRoutes = require("./accommodation_admin_routes");
 router.use("/accommodations", requireAdminLogin, accommodationAdminRoutes);
+const lookupAdminRoutes = require("./lookup_admin_routes");
+router.use("/lookup", requireAdminLogin, lookupAdminRoutes);
 
 
 /**
@@ -33,13 +35,5 @@ router.use("/accommodations", requireAdminLogin, accommodationAdminRoutes);
  */
 //const roomTypeAdminRoutes = require("./roomType_admin_routes");
 //router.use("/room-types", requireAdminLogin, roomTypeAdminRoutes);
-
-
-
-
-
-
-
-
 
 module.exports = router;

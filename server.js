@@ -5,6 +5,7 @@ const { sqlObj, connectDB } = require("./configs/database");
 
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
 
 // import Session object của Customer & Admin
 const customerSession = require("./configs/customerSession");
@@ -30,6 +31,7 @@ app.use(cors({
 
 // cho phép app nhận data JSON trong request được gửi đến server đang run app
 app.use(express.json());
+app.use("/uploads", express.static(path.join(__dirname, "public", "uploads")));
 
 // chỉ định tất cả API của phần Web (có prefix "/api/web/*") phải áp dụng Customer Session & toàn bộ route trong webRoutes 
 app.use("/api/web", customerSession, webRoutes);
