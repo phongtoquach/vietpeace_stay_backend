@@ -1,0 +1,717 @@
+const sql = require('mssql');
+const { getDBPool } = require('../configs/database');
+
+// Các hằng số trong Accommodation
+const {
+    ACCOMMODATION_STATUS_LABEL,
+    SORT_FIELD_MAP,
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE
+} = require('../constants/accommodation');
+
+// Format ngày giờ
+const { formatDateTime } = require('../utils/datetime');
+
+/**
+ * Lỗi riêng của service accommodation.
+ *
+ * Vì sao cần class này?
+ * Service có thể phát hiện nhiều loại lỗi khác nhau:
+ *
+ * - Filter sai  → HTTP 400
+ * - Không tìm thấy dữ liệu → HTTP 404
+ * - Dữ liệu bị trùng → HTTP 409
+ *
+ * Controller sẽ đọc các thuộc tính này để trả response đúng chuẩn.
+ */
+
+class AccommodationServiceError extends Error {
+    constructor(
+        message,
+        statusCode = 400,
+        errorCode = "VALIDATION_ERROR",
+        errors = undefined
+    ) {
+        // Gọi constructor của Error gốc.
+        super(message);
+
+        // HTTP status muốn trả về frontend.
+        this.statusCode = statusCode;
+
+        // Mã lỗi
+        this.errorCode = errorCode;
+
+        // Lỗi theo từng field, ví dụ { status: "..." }.
+        this.errors = errors;
+    }
+}
+
+/**
+ * Chuyển một giá trị query thành số nguyên dương.
+ *
+ * Ví dụ:
+ * parsePositiveInt("10", 1)     → 10
+ * parsePositiveInt("abc", 1)    → 1
+ * parsePositiveInt("-2", 1)     → 1
+ * parsePositiveInt(undefined, 1) → 1
+ *
+ * Dùng cho page, limit, locationId, provinceId...
+ */
+
+function parsePositiveInt(value, defaultValue = null) {
+    const number = Number.parseInt(value, 10);
+
+    // Nếu không phải số nguyên dương,
+    // trả về giá trị mặc định.
+    if (!Number.isInteger(number) || number <= 0) {
+        return defaultValue;
+    }
+
+    return number;
+}
+
+/**
+ * Chuẩn hóa page và limit từ URL.
+ *
+ * Quy tắc:
+ * - page nhỏ nhất là 1
+ * - limit mặc định là 10
+ * - limit lớn nhất là 100
+ * - offset dùng để SQL biết bỏ qua bao nhiêu dòng
+ */
+function parsePagination(query) {
+    // Nếu page sai hoặc không có thì dùng page 1.
+    const page = Math.max(
+        1,
+        parsePositiveInt(query.page, 1)
+    );
+
+    // Nếu limit sai hoặc không có thì dùng limit mặc định.
+    const requestedLimit = parsePositiveInt(
+        query.limit,
+        DEFAULT_PAGE_SIZE
+    );
+
+    // Không cho phép lấy quá MAX_PAGE_SIZE dòng một lần.
+    const limit = Math.min(
+        MAX_PAGE_SIZE,
+        Math.max(1, requestedLimit)
+    );
+
+    // Ví dụ:
+    // page = 1, limit = 10 → offset = 0
+    // page = 2, limit = 10 → offset = 10
+    // page = 3, limit = 10 → offset = 20
+    const offset = (page - 1) * limit;
+
+    return {
+        page,
+        limit,
+        offset
+    };
+}
+
+/**
+ * Chuyển một dòng dữ liệu từ SQL Server
+ * thành một object đúng Data Transfer Ojbect của frontend.
+ *
+ * Database:
+ *   accommodation_name
+ *
+ * Frontend:
+ *   name
+ */
+function mapSummaryRow(row) {
+    return {
+        // Thông tin cơ bản
+        id: row.id,
+        code: row.accommodation_code,
+        name: row.accommodation_name,
+        slug: row.slug,
+
+        // Loại hình lưu trú.
+        type: {
+            id: row.accommodation_type_id,
+            code: row.type_code,
+            name: row.type_name
+        },
+
+        // Điểm đến du lịch.
+        location: {
+            id: row.location_id,
+            name: row.location_name
+        },
+
+        // Tỉnh/thành.
+        province: {
+            id: row.province_id,
+            name: row.province_name
+        },
+
+        // Ward có thể không có dữ liệu nên cần trả null.
+        ward: row.ward_id ? {
+            id: row.ward_id,
+            name: row.ward_name
+        } : null,
+
+        // Thông tin hiển thị danh sách.
+        addressLine: row.address_line,
+        starRating: row.star_rating,
+        status: row.status,
+
+        // Ví dụ status = 1 → "Đang hoạt động".
+        statusLabel: ACCOMMODATION_STATUS_LABEL[row.status] || null,
+
+        // SQL Server trả BIT, chuyển rõ thành boolean JavaScript.
+        isFeatured: Boolean(row.is_featured),
+
+        // Nếu chưa có ảnh thì trả null,
+        // frontend có thể hiển thị placeholder.
+        coverImageUrl: row.cover_image_url || null,
+
+        // COUNT từ SQL thường trả về số,
+        // nhưng ép kiểu để DTO luôn ổn định.
+        roomTypesCount: Number(row.room_types_count || 0),
+        amenitiesCount: Number(row.amenities_count || 0),
+
+        // Format DATETIME2 thành "YYYY-MM-DD HH:mm:ss".
+        updatedAt: formatDateTime(row.updated_at)
+
+    }
+}
+
+/**
+ * Chuyển chuỗi CSV thành mảng số nguyên.
+ *
+ * Ví dụ:
+ * "1,2,3" → [1, 2, 3]
+ * ""       → []
+ *
+ * Dùng cho:
+ * ?typeId=1,2
+ * ?status=1,2
+ */
+function parseCsvInt(value, fieldName) {
+    // Không có filter thì trả mảng rỗng.
+    if (value === undefined || value === null || value === "") {
+        return [];
+    }
+
+    // Tách chuỗi bằng dấu phẩy.
+    const values = String(value)
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+    // Chuyển từng phần thành Number.
+    const numbers = values.map((item) => Number(item));
+
+    // Kiểm tra từng phần có phải số nguyên dương không.
+    const isInvalid = numbers.some(
+        (number) => !Number.isInteger(number) || number <= 0
+    );
+
+    if (isInvalid) {
+        throw new AccommodationServiceError(
+            "Dữ liệu filter không hợp lệ.",
+            400,
+            "VALIDATION_ERROR",
+            {
+                [fieldName]: `${fieldName} phải là danh sách số nguyên dương.`
+            }
+        );
+    }
+
+    // Loại bỏ ID trùng nhau.
+    return [...new Set(numbers)];
+}
+
+/**
+ * Thêm điều kiện IN vào câu SQL.
+ *
+ * Ví dụ:
+ * values = [1, 2]
+ * column = "a.status"
+ *
+ * Kết quả:
+ * a.status IN (@status0, @status1)
+ */
+function addCsvFilter({
+    whereParts,
+    params,
+    column,
+    values,
+    parameterPrefix,
+    sqlType
+}) {
+    // Không có giá trị thì không thêm điều kiện.
+    if (values.length === 0) {
+        return;
+    }
+
+    // Tạo tên parameter cho từng giá trị.
+    const placeholders = values.map((value, index) => {
+        const parameterName = `${parameterPrefix}${index}`;
+
+        // Lưu parameter để lát nữa gắn vào SQL request.
+        params.push({
+            name: parameterName,
+            type: sqlType,
+            value
+        });
+
+        return `@${parameterName}`;
+    });
+
+    // Ví dụ kết quả:
+    // a.status IN (@status0, @status1)
+    whereParts.push(
+        `${column} IN (${placeholders.join(", ")})`
+    );
+}
+
+/**
+ * Lấy danh sách accommodation từ database.
+ *
+ * query:
+ * - q
+ * - typeId
+ * - locationId
+ * - provinceId
+ * - status
+ * - isFeatured
+ * - sortBy
+ * - sortDir
+ * - page
+ * - limit
+ *
+ * currentUser:
+ * - req.session.admin
+ */
+async function getAccommodationList(query = {}, currentUser = {}) {
+    // Lấy connection pool tới SQL Server.
+    const pool = getDBPool();
+    // Đọc thông tin phân trang.
+    const {
+        page,
+        limit,
+        offset
+    } = parsePagination(query);
+    // Đọc các filter dạng danh sách.
+    const typeIds = parseCsvInt(
+        query.typeId,
+        "typeId"
+    );
+    const statusIds = parseCsvInt(
+        query.status,
+        "status"
+    );
+    // Đọc các filter chỉ có một ID.
+    const locationId = parsePositiveInt(
+        query.locationId
+    );
+    const provinceId = parsePositiveInt(
+        query.provinceId
+    );
+    // Từ khóa tìm kiếm.
+    const q = typeof query.q === "string"
+        ? query.q.trim()
+        : "";
+    // isFeatured có 3 trạng thái:
+    // true  → chỉ lấy nổi bật
+    // false → chỉ lấy không nổi bật
+    // null  → không lọc theo nổi bật
+    const isFeatured =
+        query.isFeatured === "true"
+            ? true
+            : query.isFeatured === "false"
+                ? false
+                : null;
+    // Kiểm tra user hiện tại có phải ADMIN không.
+    const isAdmin = currentUser.role === "ADMIN";
+
+    // Chỉ ADMIN mới được xem dữ liệu đã xóa mềm.
+    const includeDeleted = isAdmin && query.includeDeleted === "true";
+
+    /*
+     * sortBy là tên cột do frontend gửi lên.
+     *
+     * Không được đưa trực tiếp query.sortBy vào SQL.
+     * Phải tra qua SORT_FIELD_MAP.
+     */
+    const requestedSortBy = String(
+        query.sortBy || "sortOrder"
+    );
+
+    const sortColumn =
+        SORT_FIELD_MAP[requestedSortBy]
+        || SORT_FIELD_MAP.sortOrder;
+
+    /*
+     * Chỉ chấp nhận desc.
+     * Mọi giá trị khác đều dùng asc.
+     */
+    const sortDirection = String(query.sortDir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
+
+    // Mảng chứa từng điều kiện WHERE.
+    const whereParts = [];
+
+    // Mảng chứa các parameter SQL.
+    const params = [];
+
+    /*
+     * Mặc định không lấy cơ sở đã xóa mềm.
+     *
+     * Đây là điều kiện bắt buộc theo AGENT.md.
+     */
+    if (!includeDeleted) {
+        whereParts.push("a.deleted_at IS NULL");
+    }
+
+    /*
+     * Tìm trong:
+     * - tên cơ sở
+     * - mã cơ sở
+     * - địa chỉ
+     */
+    if (q) {
+        whereParts.push(`
+            (
+                a.accommodation_name LIKE @q
+                OR a.accommodation_code LIKE @q
+                OR a.address_line LIKE @q
+            )
+        `);
+
+        params.push({
+            name: "q",
+            type: sql.NVarChar(255),
+            value: `%${q}%`
+        });
+    }
+
+    if (locationId) {
+        whereParts.push(
+            "a.location_id = @locationId"
+        );
+
+        params.push({
+            name: "locationId",
+            type: sql.Int,
+            value: locationId
+        });
+    }
+
+    if (provinceId) {
+        whereParts.push(
+            "a.province_id = @provinceId"
+        );
+
+        params.push({
+            name: "provinceId",
+            type: sql.Int,
+            value: provinceId
+        });
+    }
+
+    if (isFeatured !== null) {
+        whereParts.push(
+            "a.is_featured = @isFeatured"
+        );
+
+        params.push({
+            name: "isFeatured",
+            type: sql.Bit,
+            value: isFeatured
+        });
+    }
+
+    // Ví dụ:
+    // typeIds = [1, 2]
+    // → a.accommodation_type_id IN (@typeId0, @typeId1)
+    addCsvFilter({
+        whereParts,
+        params,
+        column: "a.accommodation_type_id",
+        values: typeIds,
+        parameterPrefix: "typeId",
+        sqlType: sql.Int
+    });
+
+    // Ví dụ:
+    // statusIds = [1, 2]
+    // → a.status IN (@status0, @status1)
+    addCsvFilter({
+        whereParts,
+        params,
+        column: "a.status",
+        values: statusIds,
+        parameterPrefix: "status",
+        sqlType: sql.TinyInt
+    });
+
+    /*
+     * whereParts có thể là:
+     *
+     * [
+     *   "a.deleted_at IS NULL",
+     *   "a.location_id = @locationId",
+     *   "a.status IN (@status0, @status1)"
+     * ]
+     *
+     * Ta nối lại thành:
+     *
+     * WHERE a.deleted_at IS NULL
+     * AND a.location_id = @locationId
+     * AND a.status IN (@status0, @status1)
+     */
+    const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join("\nAND ")}` : "";
+
+    /*
+     * Query này lấy dữ liệu của trang hiện tại.
+     *
+     * Nó lấy:
+     * - Thông tin chính từ accommodations
+     * - Tên loại hình từ accommodation_types
+     * - Tên điểm đến từ locations
+     * - Tên tỉnh từ provinces
+     * - Tên phường từ wards
+     * - Ảnh cover từ accommodation_images
+     * - Số loại phòng
+     * - Số tiện nghi
+     */
+
+    const selectSql = `
+        SELECT 
+        -- Thông tin chính của Accommodation.
+        a.id, a.accommodation_code, a.accommodation_name, a.slug,
+
+        -- Thông tin loại hình lưu trú.
+        a.accommodation_type_id, t.code AS type_code, t.name AS type_name,
+
+        -- Thông tin điểm đến.
+            a.location_id, l.name AS location_name,
+        
+        -- Thông tin tỉnh/thành.
+            a.province_id, p.name AS province_name,
+        
+        -- Thông tin phường/xã.
+            a.ward_id, w.name AS ward_name,
+
+        -- Các thông tin hiển thị trong danh sách.
+            a.address_line, a.star_rating, a.status, a.is_featured, a.updated_at,
+        
+            /*
+             * Lấy một ảnh đại diện.
+             *
+             * Ưu tiên:
+             * 1. Ảnh có is_cover = 1
+             * 2. sort_order nhỏ hơn
+             * 3. id nhỏ hơn
+             *
+             * OUTER APPLY giúp mỗi accommodation
+             * chỉ xuất hiện một dòng.
+             */
+        cover.image_url AS cover_image_url,
+
+            /*
+             * Đếm số loại phòng của accommodation.
+             *
+             * deleted_at IS NULL nghĩa là không đếm
+             * loại phòng đã bị xóa mềm.
+             */
+            (
+                SELECT COUNT(*)
+                FROM dbo.room_types rt
+                WHERE rt.accommodation_id = a.id
+                  AND rt.deleted_at IS NULL
+            ) AS room_types_count,
+
+            /*
+             * Đếm số tiện nghi được gán cho accommodation.
+             */
+            (
+                SELECT COUNT(*)
+                FROM dbo.accommodation_amenities aa
+                WHERE aa.accommodation_id = a.id
+            ) AS amenities_count
+
+        FROM dbo.accommodations a JOIN dbo.accommodation_types t ON t.id = a.accommodation_type_id
+        JOIN dbo.locations l ON l.id = a.location_id
+        JOIN dbo.provinces p ON p.id = a.province_id
+        LEFT JOIN dbo.wards w ON w.id = a.ward_id
+
+        /*
+         * Lấy ảnh đầu tiên phù hợp với từng accommodation.
+         */
+        OUTER APPLY (
+            SELECT TOP 1 ai.image_url
+            FROM dbo.accommodation_images ai
+            WHERE ai.accommodation_id = a.id
+            ORDER BY
+                ai.is_cover DESC,
+                ai.sort_order ASC,
+                ai.id ASC
+        ) cover ${whereSql}
+
+        /*
+         * whereSql được tạo từ các filter ở bước trước.
+         *
+         * Ví dụ:
+         * WHERE a.deleted_at IS NULL
+         * AND a.status IN (@status0)
+         * AND a.location_id = @locationId
+         */
+
+        /*
+         * sortColumn và sortDirection đã được whitelist
+         * trước đó, không lấy trực tiếp từ input người dùng.
+         *
+         * a.id ASC là điều kiện phụ để thứ tự ổn định
+         * khi hai dòng có cùng sort_order.
+         */
+
+        ORDER BY ${sortColumn} ${sortDirection}, a.id ASC
+
+        /*
+         * Bỏ qua offset dòng đầu tiên,
+         * sau đó lấy tối đa limit dòng.
+         */
+
+        OFFSET @offset ROWS
+
+        FETCH NEXT @limit ROWS ONLY;
+    `;
+
+    /*
+     * Query này không lấy dữ liệu chi tiết.
+     * Nó chỉ đếm tổng số accommodation phù hợp với filter.
+     *
+     * Vì sao cần query riêng?
+     *
+     * Nếu chỉ dùng items.length thì khi đang ở page 2,
+     * ta chỉ biết page đó có bao nhiêu dòng,
+     * không biết toàn bộ database có bao nhiêu dòng.
+     */
+    const countSql = `
+        SELECT COUNT(*) AS total
+        FROM dbo.accommodations a
+
+        ${whereSql};
+    `;
+
+    /*
+     * Tạo request dùng cho query SELECT.
+     *
+     * params chứa các parameter đã được tạo từ filter:
+     * - q
+     * - locationId
+     * - provinceId
+     * - isFeatured
+     * - typeId0, typeId1...
+     * - status0, status1...
+     */
+    const dataRequest = pool.request();
+
+    /*
+     * Gắn từng parameter vào request.
+     *
+     * Ví dụ:
+     * .input("locationId", sql.Int, 1)
+     *
+     * Giá trị không được nối trực tiếp vào SQL.
+     * Đây là cách chống SQL injection.
+     */
+    for (const param of params) {
+        dataRequest.input(
+            param.name,
+            param.type,
+            param.value
+        );
+    }
+
+    /*
+     * offset và limit cũng là parameter SQL.
+     */
+    dataRequest.input("offset", sql.Int, offset).input("limit", sql.Int, limit);
+
+    /*
+     * Query count cũng cần nhận cùng các filter.
+     *
+     * Ta phải tạo request riêng vì mỗi request
+     * có danh sách parameter riêng.
+     */
+    const countRequest = pool.request();
+
+    for (const param of params) {
+        countRequest.input(
+            param.name,
+            param.type,
+            param.value
+        );
+    }
+
+    /*
+     * Hai query không phụ thuộc kết quả của nhau,
+     * nên chạy song song bằng Promise.all().
+     *
+     * - dataResult: dữ liệu của trang hiện tại
+     * - countResult: tổng số dòng phù hợp
+     */
+    const [
+        dataResult,
+        countResult
+    ] = await Promise.all([
+        dataRequest.query(selectSql),
+        countRequest.query(countSql)
+    ]);
+
+    /*
+     * dataResult.recordset là mảng các dòng SQL.
+     *
+     * mapSummaryRow() sẽ chuyển từng dòng:
+     * accommodation_name → name
+     * is_featured → isFeatured
+     * type_code + type_name → type
+     */
+    const items = dataResult.recordset.map(
+        mapSummaryRow
+    );
+
+    /*
+     * COUNT(*) có thể trả về kiểu số khác nhau
+     * tùy driver, nên ép rõ về Number.
+     */
+    const total = Number(
+        countResult.recordset[0]?.total || 0
+    );
+
+    /*
+     * Service chỉ trả dữ liệu.
+     * Service không gọi res.json().
+     *
+     * Controller mới chịu trách nhiệm trả HTTP response.
+     */
+    return {
+        items,
+
+        pagination: {
+            page,
+            limit,
+            total,
+            totalPages: limit > 0
+                ? Math.ceil(total / limit)
+                : 0
+        }
+    };
+
+}
+
+/*
+ * Export các hàm để controller có thể sử dụng.
+ */
+module.exports = {
+    getAccommodationList,
+    mapSummaryRow,
+    AccommodationServiceError
+};
