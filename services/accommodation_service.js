@@ -10,7 +10,8 @@ const {
 } = require('../constants/accommodation');
 
 // Format ngày giờ
-const { formatDateTime } = require('../utils/datetime');
+const { formatTime, formatDateTime } = require('../utils/datetime')
+
 
 /**
  * Lỗi riêng của service accommodation.
@@ -707,11 +708,205 @@ async function getAccommodationList(query = {}, currentUser = {}) {
 
 }
 
+function mapDetailRow(row) {
+    return {
+        id: row.id,
+        code: row.accommodation_code,
+        name: row.accommodation_name,
+        slug: row.slug,
+        type: {
+            id: row.accommodation_type_id,
+            code: row.type_code,
+            name: row.type_name
+        },
+
+        location: {
+            id: row.location_id,
+            name: row.location_name
+        },
+
+        province: {
+            id: row.province_id,
+            name: row.province_name
+        },
+
+        ward: row.ward_id
+            ? {
+                id: row.ward_id,
+                name: row.ward_name
+            }
+            : null,
+
+        addressLine: row.address_line,
+        starRating: row.star_rating,
+        status: row.status,
+        statusLabel: ACCOMMODATION_STATUS_LABEL[row.status] || null,
+        isFeatured: Boolean(row.is_featured),
+        coverImageUrl: row.cover_image_url || null,
+
+        postalCode: row.postal_code,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        directions: row.directions,
+        shortDescription: row.short_description,
+        description: row.description,
+        phone: row.phone,
+        email: row.email,
+        websiteUrl: row.website_url,
+
+        checkInTime: formatTime(row.check_in_time),
+        checkOutTime: formatTime(row.check_out_time),
+        checkInInstructions: row.check_in_instructions,
+        houseRules: row.house_rules,
+        childrenPolicy: row.children_policy,
+        petPolicy: row.pet_policy,
+        smokingPolicy: row.smoking_policy,
+
+        sortOrder: row.sort_order,
+        createdAt: formatDateTime(row.created_at),
+        updatedAt: formatDateTime(row.updated_at)
+    }
+}
+
+/**
+ * Lấy thông tin chính của một cơ sở lưu trú.
+ *
+ * Giai đoạn này chỉ lấy bảng chính và các bảng quan hệ:
+ * - accommodations
+ * - accommodation_types
+ * - locations
+ * - provinces
+ * - wards
+ *
+ * Ảnh gallery, tiện nghi, điểm tham quan và loại phòng
+ * sẽ được thêm ở các bước học tiếp theo.
+ */
+async function getAccommodationDetail(id, currentUser = {}) {
+    // Kiểm tra id trước khi gửi xuống database.
+    // Ví dụ: "abc", 0, -1 đều không phải ID hợp lệ.
+    const accommodationId = parsePositiveInt(id);
+    if (!accommodationId) {
+        throw new AccommodationServiceError(
+            "ID cơ sở lưu trú không hợp lệ.",
+            400,
+            "VALIDATION_ERROR",
+            { id: "ID phải là số nguyên dương." }
+        )
+    }
+
+    const pool = getDBPool();
+    const result = await pool.request().input("accommodationId", sql.Int, accommodationId)
+        .query(`
+        SELECT
+                -- Thông tin chính của accommodation.
+                a.id,
+                a.accommodation_code,
+                a.accommodation_name,
+                a.slug,
+                -- Thông tin loại hình.
+                a.accommodation_type_id,
+                t.code AS type_code,
+                t.name AS type_name,
+                -- Thông tin điểm đến.
+                a.location_id,
+                l.name AS location_name,
+                -- Thông tin tỉnh/thành.
+                a.province_id,
+                p.name AS province_name,
+                -- Thông tin phường/xã.
+                a.ward_id,
+                w.name AS ward_name,
+                -- Thông tin hiển thị.
+                a.address_line,
+                a.star_rating,
+                a.status,
+                a.is_featured,
+                -- Thông tin chi tiết.
+                a.postal_code,
+                a.latitude,
+                a.longitude,
+                a.directions,
+                a.short_description,
+                a.description,
+                a.phone,
+                a.email,
+                a.website_url,
+                -- Giờ và chính sách.
+                a.check_in_time,
+                a.check_out_time,
+                a.check_in_instructions,
+                a.house_rules,
+                a.children_policy,
+                a.pet_policy,
+                a.smoking_policy,
+                -- Thứ tự và thời gian.
+                a.sort_order,
+                a.created_at,
+                a.updated_at,
+                /*
+                 * Lấy một ảnh đại diện.
+                 *
+                 * Ưu tiên:
+                 * 1. Ảnh có is_cover = 1.
+                 * 2. Nếu cùng loại thì lấy sort_order nhỏ hơn.
+                 * 3. Nếu vẫn trùng thì lấy id nhỏ hơn.
+                 *
+                 * OUTER APPLY giúp mỗi accommodation
+                 * chỉ xuất hiện một dòng.
+                 */
+                cover.image_url AS cover_image_url
+            FROM dbo.accommodations a
+            JOIN dbo.accommodation_types t
+                ON t.id = a.accommodation_type_id
+            JOIN dbo.locations l
+                ON l.id = a.location_id
+            JOIN dbo.provinces p
+                ON p.id = a.province_id
+            LEFT JOIN dbo.wards w
+                ON w.id = a.ward_id
+            OUTER APPLY (
+                SELECT TOP 1
+                    ai.image_url
+                FROM dbo.accommodation_images ai
+                WHERE ai.accommodation_id = a.id
+                ORDER BY
+                    ai.is_cover DESC,
+                    ai.sort_order ASC,
+                    ai.id ASC
+            ) cover
+            WHERE a.id = @accommodationId
+              /*
+               * Không cho xem dữ liệu đã bị xóa mềm.
+               * Đây là quy tắc chung của module accommodation.
+               */
+              AND a.deleted_at IS NULL;
+        `);
+    /*
+    * Nếu recordset rỗng nghĩa là không có accommodation
+    * hoặc accommodation đã bị xóa mềm.
+    */
+    if (result.recordset.length == 0) {
+        throw new AccommodationServiceError("Không tìm thấy cơ sở lưu trú.",
+            404,
+            "NOT_FOUND");
+    }
+
+    const row = result.recordset[0];
+
+    /*
+     * mapDetailRow() chỉ chuyển đổi tên cột SQL
+     * thành object camelCase cho frontend.
+     */
+    return mapDetailRow(row);
+}
+
 /*
  * Export các hàm để controller có thể sử dụng.
  */
 module.exports = {
     getAccommodationList,
+    getAccommodationDetail,
     mapSummaryRow,
+    mapDetailRow,
     AccommodationServiceError
 };
