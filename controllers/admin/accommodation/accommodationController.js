@@ -54,11 +54,29 @@ async function getAccommodationsList(req, res) {
 
 // Lấy thông tin chi tiết 1 Accommodation theo Accommodation ID
 async function getAccommodationDetail(req, res) {
+    try {
+        const result = await accommodationService.getAccommodationDetail(req.params.id, req.session.admin);
+        return ok(
+            res,
+            result,
+            "Lấy chi tiết cơ sở lưu trú thành công."
+        );
+    } catch (error) {
+        console.error("[getAccommodationDetail] Lỗi lấy chi tiết", error);
+        if (error.statusCode && error.errorCode) {
+            return fail(res,
+                error.statusCode,
+                error.errorCode,
+                error.message,
+                error.errors
+            );
+        }
+    }
     return fail(
         res,
-        501,
-        "NOT_IMPLEMENTED",
-        "API chi tiết chưa được triển khai.");
+        500,
+        "INTERNAL_ERROR",
+        "Đã xảy ra lỗi khi lấy chi tiết cơ sở lưu trú.");
 }
 
 

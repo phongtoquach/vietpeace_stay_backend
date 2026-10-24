@@ -769,6 +769,32 @@ function mapDetailRow(row) {
 }
 
 /**
+ * Chuyển một dòng ảnh từ database
+ * thành DTO dùng cho frontend.
+ *
+ * SQL dùng snake_case:
+ * image_url, alt_text, is_cover
+ *
+ * API dùng camelCase:
+ * imageUrl, altText, isCover
+ */
+
+function mapImageRow(row) {
+    return {
+        id: row.id,
+        imageUrl: row.image_url,
+        altText: row.alt_text,
+        caption: row.caption,
+
+        // SQL Server trả BIT.
+        // Boolean() giúp frontend luôn nhận true hoặc false.
+        isCover: Boolean(row.is_cover),
+
+        sortOrder: row.sort_order
+    }
+}
+
+/**
  * Lấy thông tin chính của một cơ sở lưu trú.
  *
  * Giai đoạn này chỉ lấy bảng chính và các bảng quan hệ:
@@ -893,12 +919,38 @@ async function getAccommodationDetail(id, currentUser = {}) {
 
     const row = result.recordset[0];
 
+    /**
+     * Lấy toàn bộ ảnh của accommodation.
+     *
+     * Đây là query thứ hai của API detail.
+     * Nếu accommodation chưa có ảnh,
+     * recordset sẽ là [] và đó là trạng thái hợp lệ.
+     */
+
+    const imagesResult = await pool.request().input("accommodationId", sql.Int, accommodationId)
+        .query(`
+        SELECT id, image_url, alt_text, caption, is_cover, sort_order
+        FROM dbo.accommodation_images
+        WHERE accommodation_id = @accommodationId
+        ORDER BY is_cover DESC, sort_order ASC, id ASC
+    `);
+
+    const images = imagesResult.recordset.map(mapImageRow);
+
     /*
      * mapDetailRow() chỉ chuyển đổi tên cột SQL
      * thành object camelCase cho frontend.
      */
-    return mapDetailRow(row);
+    const detail = mapDetailRow(row);
+
+    // Gắn gallery vào DTO sau khi đã map dữ liệu ảnh.
+    // Nếu bảng accommodation_images rỗng,
+    // images vẫn là mảng [] đúng contract API.
+    detail.images = images;
+    return detail;
 }
+
+
 
 /*
  * Export các hàm để controller có thể sử dụng.
