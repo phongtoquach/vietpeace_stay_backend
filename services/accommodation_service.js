@@ -795,6 +795,97 @@ function mapImageRow(row) {
 }
 
 /**
+ * Chuyển một dòng tiện nghi từ database
+ * thành object camelCase cho frontend.
+ *
+ * SQL trả về các alias dạng snake_case:
+ * amenity_id, category_code, is_chargeable
+ *
+ * API trả về các field dạng camelCase:
+ * id, categoryCode, isChargeable
+ */
+
+function mapAmenityRow(row) {
+    return {
+        id: row.amenity_id,
+        code: row.amenity_code,
+        name: row.amenity_name,
+        categoryCode: row.category_code,
+        categoryName: row.category_name,
+        iconKey: row.icon_key,
+        isChargeable: Boolean(row.is_chargeable),
+        note: row.note
+    }
+}
+
+/**
+ * Chuyển số mét thành chuỗi dễ đọc.
+ *
+ * - null → null vì chưa có khoảng cách
+ * - dưới 1000m → hiển thị theo mét
+ * - từ 1000m trở lên → hiển thị theo kilomet
+ */
+
+function formatDistanceText(distanceMeters) {
+    if (distanceMeters === null) {
+        return null;
+    }
+
+    if (distanceMeters < 1000) {
+        return `${distanceMeters} m`;
+    }
+
+    const kilometers = distanceMeters / 1000;
+    return `${kilometers.toFixed(1)} km`;
+}
+
+/**
+ * Chuyển một dòng điểm tham quan từ database
+ * thành DTO camelCase cho frontend.
+ */
+
+function mapAttractionRow(row) {
+    const distanceMeters = row.distance_meters === null ? null : Number(row.distance_meters);
+    return {
+        attractionId: row.attraction_id,
+        name: row.attraction_name,
+        addressLine: row.address_line,
+        imageUrl: row.image_url,
+        isActive: Boolean(row.is_active),
+
+        distanceMeters,
+
+        // Frontend có thể hiển thị trực tiếp chuỗi này.
+        // Ví dụ: 3500 mét → "3.5 km".
+        distanceText: formatDistanceText(distanceMeters),
+
+        note: row.note,
+        sortOrder: row.sort_order
+    }
+}
+
+/**
+ * Chuyển một dòng room type từ database
+ * thành DTO dùng cho frontend.
+ */
+
+function mapRoomTypeRow(row) {
+    return {
+        id: row.room_type_id,
+        code: row.room_type_code,
+        name: row.room_type_name,
+        status: row.room_type_status,
+        quantity: row.quantity,
+
+        // MIN(price) có thể không có nếu room type
+        // chưa được tạo giá theo các ngày trong tuần.
+        minPrice: row.min_price === null ? null : Number(row.min_price),
+
+        coverImageUrl: row.cover_image_url || null
+    }
+}
+
+/**
  * Lấy thông tin chính của một cơ sở lưu trú.
  *
  * Giai đoạn này chỉ lấy bảng chính và các bảng quan hệ:
@@ -937,6 +1028,110 @@ async function getAccommodationDetail(id, currentUser = {}) {
 
     const images = imagesResult.recordset.map(mapImageRow);
 
+    /**
+     * Lấy các tiện nghi đã gán cho accommodation.
+     *
+     * Nếu accommodation chưa có tiện nghi,
+     * recordset sẽ là [] và đó là trạng thái hợp lệ.
+     */
+
+    const amenitiesResult = await pool.request().input("accommodationId", sql.Int, accommodationId).query(`
+        SELECT
+            aa.amenity_id,
+            am.code AS amenity_code,
+            am.name AS amenity_name,
+            am.category_code,
+            ac.name AS category_name,
+            am.icon_key,
+            aa.is_chargeable,
+            aa.note
+        FROM dbo.accommodation_amenities aa
+        JOIN dbo.amenities am
+        ON am.id = aa.amenity_id
+        LEFT JOIN dbo.amenity_categories ac
+        ON ac.code = am.category_code
+        WHERE aa.accommodation_id = @accommodationId
+        ORDER BY
+            ac.sort_order ASC,
+            am.sort_order ASC,
+            am.id ASC;
+    `);
+
+    const amenities = amenitiesResult.recordset.map(mapAmenityRow);
+
+    /**
+     * Lấy các điểm tham quan được gán cho accommodation.
+     *
+     * Nếu chưa có điểm tham quan,
+     * recordset sẽ là [] và đây là trạng thái hợp lệ.
+     */
+
+    const attractionsResult = await pool.request().input("accommodationId", sql.Int, accommodationId).query(`
+        SELECT
+            aa.attraction_id,
+            at.name AS attraction_name,
+            at.address_line,
+            at.image_url,
+            at.is_active,
+            aa.distance_meters,
+            aa.note,
+            aa.sort_order
+        FROM dbo.accommodation_attractions aa
+        JOIN dbo.attractions at
+        ON at.id = aa.attraction_id
+        WHERE aa.accommodation_id = @accommodationId
+        ORDER BY
+            aa.sort_order ASC,
+            aa.distance_meters ASC,
+            at.name ASC;
+    `);
+
+    const attractions = attractionsResult.recordset.map(mapAttractionRow);
+
+    /**
+     * Lấy các loại phòng chưa bị xóa mềm.
+     *
+     * OUTER APPLY lấy một ảnh cover duy nhất,
+     * tránh làm nhân số dòng room type.
+     *
+     * Subquery MIN lấy mức giá thấp nhất trong
+     * các giá theo ngày của từng room type.
+     */
+
+    const roomTypesResult = await pool.request().input("accommodationId", sql.Int, accommodationId).query(`
+            SELECT
+            rt.id AS room_type_id,
+            rt.code AS room_type_code,
+            rt.name AS room_type_name,
+            rt.status AS room_type_status,
+            rt.quantity,
+            rates.min_price,
+            cover.image_url AS cover_image_url
+            FROM dbo.room_types rt
+            OUTER APPLY (
+                SELECT
+                MIN(r.price) AS min_price
+                FROM dbo.room_weekday_rates r
+                WHERE r.room_type_id = rt.id
+            ) rates
+            OUTER APPLY (
+                SELECT TOP 1 rti.image_url
+                FROM dbo.room_type_images rti
+                WHERE rti.room_type_id = rt.id
+                ORDER BY
+                    rti.is_cover DESC,
+                    rti.sort_order ASC,
+                    rti.id ASC
+            ) cover
+            WHERE rt.accommodation_id = @accommodationId
+            AND rt.deleted_at IS NULL
+            ORDER BY
+                rt.sort_order ASC,
+                rt.id ASC;
+    `);
+
+    const roomTypes = roomTypesResult.recordset.map(mapRoomTypeRow);
+
     /*
      * mapDetailRow() chỉ chuyển đổi tên cột SQL
      * thành object camelCase cho frontend.
@@ -947,6 +1142,10 @@ async function getAccommodationDetail(id, currentUser = {}) {
     // Nếu bảng accommodation_images rỗng,
     // images vẫn là mảng [] đúng contract API.
     detail.images = images;
+    detail.amenities = amenities;
+    detail.attractions = attractions;
+    detail.roomTypes = roomTypes;
+
     return detail;
 }
 
@@ -960,5 +1159,8 @@ module.exports = {
     getAccommodationDetail,
     mapSummaryRow,
     mapDetailRow,
+    mapAmenityRow,
+    mapAttractionRow,
+    mapRoomTypeRow,
     AccommodationServiceError
 };
