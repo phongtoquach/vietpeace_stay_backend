@@ -7,10 +7,12 @@ const router = express.Router();
 
 const accommodationController = require("../../controllers/admin/accommodation/accommodationController");
 
+const requireAdminLogin = require("../../middlewares/requireAdminLogin");
 
-router.get("/", accommodationController.getAccommodationsList);
 
-router.get("/:id", accommodationController.getAccommodationDetail);
+router.get("/", requireAdminLogin, accommodationController.getAccommodationsList);
+
+router.get("/:id", requireAdminLogin, accommodationController.getAccommodationDetail);
 
 
 // export
