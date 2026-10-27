@@ -7,11 +7,11 @@ const router = express.Router();
 
 const accommodationController = require("../../controllers/admin/accommodation/accommodationController");
 
-
 router.get("/", accommodationController.getAccommodationsList);
 
-router.get("/:id", accommodationController.getAccommodationDetail);
+router.get("/stats", accommodationController.getAccommodationStats);
 
+router.get("/:id", accommodationController.getAccommodationDetail);
 
 // export
 module.exports = router;
