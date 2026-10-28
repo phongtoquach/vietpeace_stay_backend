@@ -1,4 +1,10 @@
 node_modules
 .env
+<<<<<<< Updated upstream
 /public/uploads/accommodations/
 /public/uploads/room_types/
+=======
+
+public/uploads/accommodations
+public/uploads/room_types
+>>>>>>> Stashed changes
