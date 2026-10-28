@@ -49,6 +49,14 @@ const lookupRoutes = require("./lookup_web_routes");
 router.use("/lookup", lookupRoutes);
 
 
+/**
+ * [PUBLIC APIS] Các API về location
+ * 
+*/
+const locationRoutes = require("./location_web_routes");
+router.use("/locations", locationRoutes);
+
+
 
 /**
  * [PUBLIC APIS] Các API để test 
