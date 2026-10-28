@@ -33,6 +33,10 @@ app.use(cors({
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "public", "uploads")));
 
+
+// cấu hình để map folder tĩnh "/public/uploads" vào URL prefix "/uploads"
+
+
 // chỉ định tất cả API của phần Web (có prefix "/api/web/*") phải áp dụng Customer Session & toàn bộ route trong webRoutes 
 app.use("/api/web", customerSession, webRoutes);
 
