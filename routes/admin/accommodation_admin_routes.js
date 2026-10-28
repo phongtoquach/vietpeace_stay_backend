@@ -7,11 +7,11 @@ const router = express.Router();
 
 const accommodationController = require("../../controllers/admin/accommodation/accommodationController");
 
-router.get("/", accommodationController.getAccommodationsList);
+const requireAdminLogin = require("../../middlewares/requireAdminLogin");
 
-router.get("/stats", accommodationController.getAccommodationStats);
-
-router.get("/:id", accommodationController.getAccommodationDetail);
+router.get("/", requireAdminLogin, accommodationController.getAccommodationsList);
+router.get("/stats", requireAdminLogin, accommodationController.getAccommodationStats);
+router.get("/:id", requireAdminLogin, accommodationController.getAccommodationDetail);
 
 // export
 module.exports = router;
