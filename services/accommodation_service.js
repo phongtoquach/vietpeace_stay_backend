@@ -183,7 +183,7 @@ function mapSummaryRow(row) {
  * ?typeId=1,2
  * ?status=1,2
  */
-function parseCsvInt(value, fieldName) {
+function parseCsvInt(value, fieldName, { allowZero = false } = {}) {
   // Không có filter thì trả mảng rỗng.
   if (value === undefined || value === null || value === "") {
     return [];
@@ -197,19 +197,24 @@ function parseCsvInt(value, fieldName) {
 
   // Chuyển từng phần thành Number.
   const numbers = values.map((item) => Number(item));
+  const minimum = allowZero ? 0 : 1;
 
-  // Kiểm tra từng phần có phải số nguyên dương không.
+  // status có giá trị 0 = Bản nháp, nên có thể cho phép số 0 có kiểm soát.
   const isInvalid = numbers.some(
-    (number) => !Number.isInteger(number) || number <= 0,
+    (number) => !Number.isInteger(number) || number < minimum,
   );
 
   if (isInvalid) {
+    const ruleMessage = allowZero
+      ? `${fieldName} phải là danh sách số nguyên không âm.`
+      : `${fieldName} phải là danh sách số nguyên dương.`;
+
     throw new AccommodationServiceError(
       "Dữ liệu filter không hợp lệ.",
       400,
       "VALIDATION_ERROR",
       {
-        [fieldName]: `${fieldName} phải là danh sách số nguyên dương.`,
+        [fieldName]: ruleMessage,
       },
     );
   }
@@ -285,7 +290,9 @@ async function getAccommodationList(query = {}, currentUser = {}) {
   const { page, limit, offset } = parsePagination(query);
   // Đọc các filter dạng danh sách.
   const typeIds = parseCsvInt(query.typeId, "typeId");
-  const statusIds = parseCsvInt(query.status, "status");
+  // Status hợp lệ gồm 0 (draft), 1 (active), 2 (inactive).
+  const statusIds = parseCsvInt(query.status, "status", { allowZero: true });
+
   // Đọc các filter chỉ có một ID.
   const locationId = parsePositiveInt(query.locationId);
   const provinceId = parsePositiveInt(query.provinceId);
@@ -301,6 +308,28 @@ async function getAccommodationList(query = {}, currentUser = {}) {
       : query.isFeatured === "false"
         ? false
         : null;
+
+  console.log("[getAccommodationList] Filter đầu vào:", {
+    q: query.q ?? null,
+    typeId: query.typeId ?? null,
+    locationId: query.locationId ?? null,
+    provinceId: query.provinceId ?? null,
+    status: query.status ?? null,
+    isFeatured: query.isFeatured ?? null,
+    sortBy: query.sortBy ?? null,
+    sortDir: query.sortDir ?? null,
+    page: query.page ?? null,
+    limit: query.limit ?? null,
+  });
+
+  console.log("[getAccommodationList] Filter sau khi parse:", {
+    typeIds,
+    statusIds,
+    locationId,
+    provinceId,
+    isFeatured,
+  });
+
   // Kiểm tra user hiện tại có phải ADMIN không.
   const isAdmin = currentUser.role === "ADMIN";
 
@@ -324,6 +353,10 @@ async function getAccommodationList(query = {}, currentUser = {}) {
    */
   const sortDirection =
     String(query.sortDir || "asc").toLowerCase() === "desc" ? "DESC" : "ASC";
+
+  // Khi sort theo id, không thêm a.id lần thứ hai trong ORDER BY.
+  // Với các cột khác, a.id giữ thứ tự ổn định khi hai dòng có cùng giá trị.
+  const tieBreaker = sortColumn === "a.id" ? "" : ", a.id ASC";
 
   // Mảng chứa từng điều kiện WHERE.
   const whereParts = [];
@@ -538,7 +571,7 @@ async function getAccommodationList(query = {}, currentUser = {}) {
          * khi hai dòng có cùng sort_order.
          */
 
-        ORDER BY ${sortColumn} ${sortDirection}, a.id ASC
+        ORDER BY ${sortColumn} ${sortDirection}${tieBreaker}
 
         /*
          * Bỏ qua offset dòng đầu tiên,
@@ -824,7 +857,14 @@ function mapRoomTypeRow(row) {
     code: row.room_type_code,
     name: row.room_type_name,
     status: row.room_type_status,
+    statusLabel: ACCOMMODATION_STATUS_LABEL[row.room_type_status] || null,
     quantity: row.quantity,
+    bedDescription: row.bed_description,
+    bedroomCount: row.bedroom_count,
+    areaSqm: row.area_sqm === null ? null : Number(row.area_sqm),
+    includedAdults: row.included_adults,
+    includedChildren: row.included_children,
+    maxOccupancy: row.max_occupancy,
 
     // MIN(price) có thể không có nếu room type
     // chưa được tạo giá theo các ngày trong tuần.
@@ -1064,6 +1104,12 @@ async function getAccommodationDetail(id, currentUser = {}) {
             rt.name AS room_type_name,
             rt.status AS room_type_status,
             rt.quantity,
+            rt.bed_description,
+            rt.bedroom_count,
+            rt.area_sqm,
+            rt.included_adults,
+            rt.included_children,
+            rt.max_occupancy,
             rates.min_price,
             cover.image_url AS cover_image_url
             FROM dbo.room_types rt
