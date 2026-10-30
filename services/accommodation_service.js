@@ -1193,6 +1193,85 @@ async function createAccommodation(body = {}, currentUser = {}) {
 }
 
 /**
+ * Cập nhật một phần cơ sở lưu trú.
+ * Field không gửi được giữ nguyên; mảng phụ có mặt thì thay thế toàn bộ.
+ */
+async function updateAccommodation(id, body = {}, currentUser = {}) {
+  const accommodationId = parsePositiveInt(id);
+  if (!accommodationId) {
+    throw new AccommodationServiceError("ID cơ sở lưu trú không hợp lệ.", 400, ERROR_CODES.VALIDATION_ERROR, { id: "ID phải là số nguyên dương." });
+  }
+  console.group("[updateAccommodation]");
+  console.log("[1] input", { id: accommodationId, fields: Object.keys(body) });
+  let transaction = null;
+  try {
+    const values = validateAccommodationPayload(body, { isCreate: false });
+    const pool = getDBPool();
+    const currentResult = await pool.request().input("accommodationId", sql.Int, accommodationId).query(`
+      SELECT * FROM dbo.accommodations WHERE id = @accommodationId AND deleted_at IS NULL;
+    `);
+    if (!currentResult.recordset.length) {
+      throw new AccommodationServiceError("Không tìm thấy cơ sở lưu trú.", 404, ERROR_CODES.NOT_FOUND);
+    }
+    const current = currentResult.recordset[0];
+    const locationId = values.locationId ?? current.location_id;
+    const wardId = values.wardId ?? current.ward_id;
+    const context = await resolveLocationContext(locationId, wardId);
+    if (values.typeId !== undefined) await resolveAccommodationType(values.typeId);
+    if (values.code !== undefined) await assertCodeAvailable(values.code, accommodationId);
+    const has = (key) => Object.prototype.hasOwnProperty.call(body, key);
+    const isAdmin = currentUser.role === "ADMIN";
+    const slug = has("slug") && isAdmin ? await ensureUniqueSlug(values.slug, accommodationId) : current.slug;
+    const value = (field, column) => values[field] !== undefined ? values[field] : current[column];
+    const payload = {
+      code: value("code", "accommodation_code"), name: value("name", "accommodation_name"), slug,
+      typeId: value("typeId", "accommodation_type_id"), locationId: context.locationId, provinceId: context.provinceId, wardId: context.wardId,
+      addressLine: value("addressLine", "address_line"), postalCode: value("postalCode", "postal_code"), latitude: value("latitude", "latitude"), longitude: value("longitude", "longitude"),
+      directions: value("directions", "directions"), shortDescription: value("shortDescription", "short_description"), description: value("description", "description"),
+      phone: value("phone", "phone"), email: value("email", "email"), websiteUrl: value("websiteUrl", "website_url"), starRating: value("starRating", "star_rating"),
+      checkInTime: values.checkInTime ?? formatTime(current.check_in_time), checkOutTime: values.checkOutTime ?? formatTime(current.check_out_time),
+      checkInInstructions: value("checkInInstructions", "check_in_instructions"), houseRules: value("houseRules", "house_rules"), childrenPolicy: value("childrenPolicy", "children_policy"),
+      petPolicy: value("petPolicy", "pet_policy"), smokingPolicy: value("smokingPolicy", "smoking_policy"), status: value("status", "status"),
+      isFeatured: values.isFeatured !== undefined ? values.isFeatured : Boolean(current.is_featured), sortOrder: value("sortOrder", "sort_order"),
+    };
+    transaction = new sql.Transaction(pool);
+    await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
+    console.log("[2] transaction bắt đầu");
+    const request = new sql.Request(transaction)
+      .input("id", sql.Int, accommodationId).input("code", sql.VarChar(150), payload.code).input("name", sql.NVarChar(255), payload.name).input("slug", sql.VarChar(350), payload.slug)
+      .input("typeId", sql.Int, payload.typeId).input("locationId", sql.Int, payload.locationId).input("provinceId", sql.Int, payload.provinceId).input("wardId", sql.Int, payload.wardId)
+      .input("addressLine", sql.NVarChar(400), payload.addressLine).input("postalCode", sql.VarChar(10), payload.postalCode).input("latitude", sql.Decimal(9, 6), payload.latitude).input("longitude", sql.Decimal(9, 6), payload.longitude)
+      .input("directions", sql.NVarChar(2000), payload.directions).input("shortDescription", sql.NVarChar(1000), payload.shortDescription).input("description", sql.NVarChar(sql.MAX), payload.description)
+      .input("phone", sql.VarChar(30), payload.phone).input("email", sql.VarChar(255), payload.email).input("websiteUrl", sql.NVarChar(1000), payload.websiteUrl).input("starRating", sql.TinyInt, payload.starRating)
+      .input("checkInTime", sql.Time, toSqlTime(payload.checkInTime)).input("checkOutTime", sql.Time, toSqlTime(payload.checkOutTime)).input("checkInInstructions", sql.NVarChar(4000), payload.checkInInstructions)
+      .input("houseRules", sql.NVarChar(sql.MAX), payload.houseRules).input("childrenPolicy", sql.NVarChar(2000), payload.childrenPolicy).input("petPolicy", sql.NVarChar(2000), payload.petPolicy).input("smokingPolicy", sql.NVarChar(2000), payload.smokingPolicy)
+      .input("status", sql.TinyInt, payload.status).input("isFeatured", sql.Bit, payload.isFeatured).input("sortOrder", sql.Int, payload.sortOrder);
+    const result = await request.query(`
+      UPDATE dbo.accommodations SET accommodation_code=@code, accommodation_name=@name, slug=@slug, accommodation_type_id=@typeId, location_id=@locationId, province_id=@provinceId, ward_id=@wardId,
+      address_line=@addressLine, postal_code=@postalCode, latitude=@latitude, longitude=@longitude, directions=@directions, short_description=@shortDescription, description=@description, phone=@phone, email=@email,
+      website_url=@websiteUrl, star_rating=@starRating, check_in_time=@checkInTime, check_out_time=@checkOutTime, check_in_instructions=@checkInInstructions, house_rules=@houseRules, children_policy=@childrenPolicy,
+      pet_policy=@petPolicy, smoking_policy=@smokingPolicy, status=@status, is_featured=@isFeatured, sort_order=@sortOrder, updated_at=SYSDATETIME() WHERE id=@id AND deleted_at IS NULL;
+    `);
+    if (!result.rowsAffected[0]) throw new AccommodationServiceError("Không tìm thấy cơ sở lưu trú.", 404, ERROR_CODES.NOT_FOUND);
+    if (has("images")) await replaceImages(transaction, accommodationId, values.images);
+    if (has("amenities")) await replaceAmenities(transaction, accommodationId, values.amenities);
+    if (has("attractions")) await replaceAttractions(transaction, accommodationId, values.attractions);
+    if (payload.status === ACCOMMODATION_STATUS.ACTIVE) await assertPublishable(transaction, accommodationId);
+    await transaction.commit();
+    console.log("[3] commit OK");
+    return getAccommodationDetail(accommodationId, currentUser);
+  } catch (error) {
+    if (transaction) {
+      console.log("[4] lỗi → rollback:", error.message);
+      try { await transaction.rollback(); } catch (rollbackError) { console.error("[5] rollback thất bại:", rollbackError.message); }
+    }
+    if (error.number === 2601 || error.number === 2627) throw new AccommodationServiceError("Mã hoặc slug đã tồn tại.", 409, ERROR_CODES.DUPLICATE_CODE);
+    if (error.number === 547) throw new AccommodationServiceError("Dữ liệu liên kết không hợp lệ.", 400, ERROR_CODES.VALIDATION_ERROR);
+    throw error;
+  } finally { console.groupEnd(); }
+}
+
+/**
  * Chuyển một giá trị query thành số nguyên dương.
  *
  * Ví dụ:
@@ -2375,6 +2454,7 @@ module.exports = {
   getAccommodationDetail,
   getAccommodationStats,
   createAccommodation,
+  updateAccommodation,
   validateAccommodationPayload,
   resolveLocationContext,
   mapSummaryRow,

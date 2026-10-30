@@ -11,6 +11,8 @@ const requireAdminLogin = require("../../middlewares/requireAdminLogin");
 
 router.get("/", requireAdminLogin, accommodationController.getAccommodationsList);
 router.get("/stats", requireAdminLogin, accommodationController.getAccommodationStats);
+router.post("/", requireAdminLogin, accommodationController.createAccommodation);
+router.put("/:id", requireAdminLogin, accommodationController.updateAccommodation);
 router.get("/:id", requireAdminLogin, accommodationController.getAccommodationDetail);
 
 // export

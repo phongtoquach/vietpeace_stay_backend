@@ -91,6 +91,49 @@ async function getAccommodationDetail(req, res) {
  * SQL vẫn nằm hoàn toàn trong accommodation_service.js.
  */
 
+/**
+ * POST /api/admin/accommodations
+ * Controller chỉ nhận body và chuyển cho service; SQL không nằm ở đây.
+ */
+async function createAccommodation(req, res) {
+  try {
+    const result = await accommodationService.createAccommodation(
+      req.body,
+      req.session.admin,
+    );
+    // 201 = đã tạo tài nguyên mới; trả kèm DTO detail để FE không phải GET lại.
+    return ok(res, result, "Tạo cơ sở lưu trú thành công.", 201);
+  } catch (error) {
+    console.error("[createAccommodation] Lỗi tạo mới:", error);
+    // Service đã phân loại lỗi (400/409/404) kèm errors dạng { field: message }.
+    if (error.statusCode && error.errorCode) {
+      return fail(res, error.statusCode, error.errorCode, error.message, error.errors);
+    }
+    return fail(res, 500, "INTERNAL_ERROR", "Đã xảy ra lỗi khi tạo cơ sở lưu trú.");
+  }
+}
+
+/**
+ * PUT /api/admin/accommodations/:id
+ * Controller chỉ nhận body và chuyển cho service; SQL không nằm ở đây.
+ */
+async function updateAccommodation(req, res) {
+  try {
+    const result = await accommodationService.updateAccommodation(
+      req.params.id,
+      req.body,
+      req.session.admin,
+    );
+    return ok(res, result, "Cập nhật cơ sở lưu trú thành công.");
+  } catch (error) {
+    console.error("[updateAccommodation] Lỗi cập nhật:", error);
+    if (error.statusCode && error.errorCode) {
+      return fail(res, error.statusCode, error.errorCode, error.message, error.errors);
+    }
+    return fail(res, 500, "INTERNAL_ERROR", "Đã xảy ra lỗi khi cập nhật cơ sở lưu trú.");
+  }
+}
+
 async function getAccommodationStats(req, res) {
   try {
     const result = await accommodationService.getAccommodationStats(
@@ -124,4 +167,6 @@ module.exports = {
   getAccommodationsList,
   getAccommodationDetail,
   getAccommodationStats,
+  createAccommodation,
+  updateAccommodation,
 };
