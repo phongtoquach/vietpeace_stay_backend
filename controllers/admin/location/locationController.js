@@ -147,6 +147,7 @@ async function createLocation(req, res) {
             province_id,
             parent_id,
             parent_location_id,
+            new_sub_region_name,
             short_description,
             description,
             is_featured,
@@ -164,7 +165,7 @@ async function createLocation(req, res) {
         }
 
         const pool = getDBPool();
-        const finalParentId = parent_id !== undefined ? parent_id : (parent_location_id || null);
+        let finalParentId = parent_id !== undefined ? parent_id : (parent_location_id || null);
 
         let finalProvinceId = province_id;
         if (!finalProvinceId && finalParentId) {
@@ -184,6 +185,38 @@ async function createLocation(req, res) {
                 finalProvinceId = provCheck.recordset[0].id;
             } else {
                 finalProvinceId = 1; // Mặc định Hà Nội
+            }
+        }
+
+        // Nếu người dùng chọn tạo kèm một khu vực con mới làm cha
+        if (new_sub_region_name && new_sub_region_name.trim()) {
+            const subName = new_sub_region_name.trim();
+            const subSlug = generateSlug(subName);
+
+            // Kiểm tra xem đã có khu vực con mang tên này chưa
+            const checkSub = await pool.request()
+                .input("sub_name", sql.NVarChar(255), subName)
+                .input("parent_id", sql.Int, finalParentId)
+                .query("SELECT id FROM dbo.locations WHERE name = @sub_name AND parent_id = @parent_id");
+
+            if (checkSub.recordset.length > 0) {
+                finalParentId = checkSub.recordset[0].id;
+            } else {
+                const createSub = await pool.request()
+                    .input("province_id", sql.Int, finalProvinceId)
+                    .input("parent_id", sql.Int, finalParentId)
+                    .input("name", sql.NVarChar(255), subName)
+                    .input("slug", sql.VarChar(255), subSlug)
+                    .query(`
+                        INSERT INTO dbo.locations (
+                            province_id, parent_id, name, slug, is_featured, sort_order, is_active, created_at
+                        )
+                        OUTPUT INSERTED.id
+                        VALUES (
+                            @province_id, @parent_id, @name, @slug, 0, 1, 1, SYSDATETIME()
+                        );
+                    `);
+                finalParentId = createSub.recordset[0].id;
             }
         }
 
@@ -266,6 +299,7 @@ async function updateLocation(req, res) {
             province_id,
             parent_id,
             parent_location_id,
+            new_sub_region_name,
             short_description,
             description,
             is_featured,
@@ -275,7 +309,7 @@ async function updateLocation(req, res) {
             image
         } = req.body;
 
-        const finalParentId = parent_id !== undefined ? parent_id : (parent_location_id !== undefined ? parent_location_id : null);
+        let finalParentId = parent_id !== undefined ? parent_id : (parent_location_id !== undefined ? parent_location_id : null);
 
         if (finalParentId && Number(finalParentId) === Number(id)) {
             return res.status(400).json({
@@ -285,6 +319,38 @@ async function updateLocation(req, res) {
         }
 
         const pool = getDBPool();
+
+        // Nếu người dùng chọn tạo kèm một khu vực con mới làm cha
+        if (new_sub_region_name && new_sub_region_name.trim()) {
+            const subName = new_sub_region_name.trim();
+            const subSlug = generateSlug(subName);
+
+            const checkSub = await pool.request()
+                .input("sub_name", sql.NVarChar(255), subName)
+                .input("parent_id", sql.Int, finalParentId)
+                .query("SELECT id FROM dbo.locations WHERE name = @sub_name AND parent_id = @parent_id");
+
+            if (checkSub.recordset.length > 0) {
+                finalParentId = checkSub.recordset[0].id;
+            } else {
+                const provId = province_id || 1;
+                const createSub = await pool.request()
+                    .input("province_id", sql.Int, provId)
+                    .input("parent_id", sql.Int, finalParentId)
+                    .input("name", sql.NVarChar(255), subName)
+                    .input("slug", sql.VarChar(255), subSlug)
+                    .query(`
+                        INSERT INTO dbo.locations (
+                            province_id, parent_id, name, slug, is_featured, sort_order, is_active, created_at
+                        )
+                        OUTPUT INSERTED.id
+                        VALUES (
+                            @province_id, @parent_id, @name, @slug, 0, 1, 1, SYSDATETIME()
+                        );
+                    `);
+                finalParentId = createSub.recordset[0].id;
+            }
+        }
         const existingLoc = await pool.request()
             .input("id", sql.Int, id)
             .query("SELECT * FROM dbo.locations WHERE id = @id");

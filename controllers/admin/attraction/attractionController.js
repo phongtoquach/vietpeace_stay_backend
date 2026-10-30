@@ -1,5 +1,51 @@
 const { getDBPool } = require("../../../configs/database");
 const sql = require("mssql");
+const fs = require("fs");
+const path = require("path");
+
+function generateSlug(str) {
+    if (!str) return "";
+    return str
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[đĐ]/g, "d")
+        .replace(/[^a-z0-9\s-]/g, "")
+        .trim()
+        .replace(/\s+/g, "-");
+}
+
+function saveBase64AttractionImage(base64Str, slug) {
+    if (!base64Str || typeof base64Str !== "string") return null;
+
+    if (!base64Str.startsWith("data:image/")) {
+        return base64Str;
+    }
+
+    const matches = base64Str.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+    if (!matches || matches.length !== 3) {
+        return null;
+    }
+
+    let ext = matches[1].toLowerCase();
+    if (ext === "jpeg") ext = "jpg";
+    if (ext === "svg+xml") ext = "svg";
+
+    const data = Buffer.from(matches[2], "base64");
+    const uploadDir = path.join(__dirname, "../../../public/uploads/attractions");
+
+    if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    const cleanSlug = slug ? slug.replace(/[^a-z0-9-]/g, "") : "attraction";
+    const filename = `${cleanSlug}-${Date.now()}.${ext}`;
+    const filePath = path.join(uploadDir, filename);
+    fs.writeFileSync(filePath, data);
+
+    return `/uploads/attractions/${filename}`;
+}
+
 
 // Hàm 1: Lấy danh sách điểm tham quan (Hỗ trợ lọc theo location_id, tìm kiếm theo tên và trạng thái)
 async function getAttractionsList(req, res) {
