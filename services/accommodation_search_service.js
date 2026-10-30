@@ -39,12 +39,12 @@ const SORT_OPTIONS = {
 // Common helpers
 // ============================================================
 
-function failure(errorCode, errorMsg = "", errorsDetail = {}) {
+function failure(errorCode, errorMsg = "", errors = {}) {
 	return {
 		success: false,
 		errorCode,
 		errorMsg,
-		errorsDetail,
+		errors
 	};
 }
 
@@ -277,11 +277,7 @@ function normalizeFilters(filters) {
 	}
 
 	if (Object.keys(errors).length > 0) {
-		return failure(
-		"DATA_INVALID",
-		"Tiêu chí tìm kiếm không hợp lệ.",
-		errors
-		);
+		return failure("DATA_INVALID", "Tiêu chí tìm kiếm không hợp lệ.", errors);
 	}
 
 	return {
