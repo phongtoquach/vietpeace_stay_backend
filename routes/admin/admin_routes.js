@@ -27,6 +27,8 @@ const accommodationAdminRoutes = require("./accommodation_admin_routes");
 router.use("/accommodations", requireAdminLogin, accommodationAdminRoutes);
 const lookupAdminRoutes = require("./lookup_admin_routes");
 router.use("/lookup", requireAdminLogin, lookupAdminRoutes);
+const uploadAdminRoutes = require("./upload_admin_routes");
+router.use("/uploads", requireAdminLogin, uploadAdminRoutes);
 
 
 /**
