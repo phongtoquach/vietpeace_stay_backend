@@ -18,7 +18,8 @@ async function searchAccommodations(req, res) {
             accommodationId: body.accommodationId,
 
             accommodationType: body.accommodationType,
-            accommodationTypeId: body.accommodationTypeId,
+            //accommodationTypeId: body.accommodationTypeId,
+            accommodationTypeIds: body.accommodationTypeIds,
 
             checkinDate: body.checkinDate ?? body.checkin,
             checkoutDate: body.checkoutDate ?? body.checkout,

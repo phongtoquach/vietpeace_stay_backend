@@ -174,11 +174,9 @@ function normalizeFilters(filters) {
 		errors
 		),
 
-		accommodationTypeId: parseInteger(
-		filters.accommodationTypeId,
-		"accommodationTypeId",
-		errors
-		),
+		//accommodationTypeId: parseInteger(filters.accommodationTypeId, "accommodationTypeId", errors),
+
+		accommodationTypeIds: parseIdList(filters.accommodationTypeIds, "accommodationTypeIds", errors),
 
 		accommodationType: null,
 
@@ -375,6 +373,7 @@ function normalizePagination(pagination) {
  * @param {number|string} [filters.accommodationId]
  * @param {string} [filters.accommodationType]
  * @param {number|string} [filters.accommodationTypeId]
+ * @param {Array<number|string>} [filters.accommodationTypeIds]
  * @param {string} [filters.checkinDate]  YYYY-MM-DD
  * @param {string} [filters.checkoutDate] YYYY-MM-DD
  * @param {number|string} [filters.rooms]
@@ -447,8 +446,20 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 		conditions.push("a.id = @accommodationId");
 	}
 
-	if (filters.accommodationTypeId !== null) {
-		conditions.push("a.accommodation_type_id = @accommodationTypeId");
+	// if (filters.accommodationTypeId !== null) {
+	// 	conditions.push("a.accommodation_type_id = @accommodationTypeId");
+	// }
+
+	if (filters.accommodationTypeIds.length > 0) {
+		conditions.push(`
+			a.accommodation_type_id IN (
+				SELECT selectedType.accommodation_type_id
+				FROM OPENJSON(@accommodationTypeIds)
+				WITH (
+					accommodation_type_id INT '$'
+				) AS selectedType
+			)
+		`);
 	}
 
 	if (filters.accommodationType !== null) {
@@ -835,11 +846,8 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 			sqlObj.Int,
 			filters.accommodationId
 		)
-		.input(
-			"accommodationTypeId",
-			sqlObj.Int,
-			filters.accommodationTypeId
-		)
+		//.input("accommodationTypeId", sqlObj.Int, filters.accommodationTypeId)
+		.input("accommodationTypeIds", sqlObj.NVarChar(sqlObj.MAX), JSON.stringify(filters.accommodationTypeIds))
 		.input(
 			"accommodationType",
 			sqlObj.VarChar(100),
