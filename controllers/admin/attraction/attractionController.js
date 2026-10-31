@@ -57,7 +57,7 @@ async function getAttractionsList(req, res) {
 
         // Xây dựng câu truy vấn động có điều kiện lọc
         let queryStr = `
-            SELECT 
+            SELECT
                 a.id,
                 a.location_id,
                 l.name AS location_name,
@@ -123,7 +123,7 @@ async function getAttractionDetail(req, res) {
         const result = await pool.request()
             .input("id", sql.Int, id)
             .query(`
-                SELECT 
+                SELECT
                     a.*,
                     l.name AS location_name
                 FROM dbo.attractions a
@@ -144,7 +144,7 @@ async function getAttractionDetail(req, res) {
         const linkedResult = await pool.request()
             .input("attractionId", sql.Int, id)
             .query(`
-                SELECT 
+                SELECT
                     aa.accommodation_id,
                     acc.accommodation_name,
                     aa.distance_meters,
@@ -224,12 +224,12 @@ async function createAttraction(req, res) {
             .input("is_active", sql.Bit, is_active !== undefined ? (is_active ? 1 : 0) : 1)
             .query(`
                 INSERT INTO dbo.attractions (
-                    location_id, name, address_line, description, 
+                    location_id, name, address_line, description,
                     image_url, is_active, created_at
                 )
                 OUTPUT INSERTED.*
                 VALUES (
-                    @location_id, @name, @address_line, @description, 
+                    @location_id, @name, @address_line, @description,
                     @image_url, @is_active, SYSDATETIME()
                 );
             `);
@@ -283,7 +283,7 @@ async function updateAttraction(req, res) {
             .input("is_active", sql.Bit, is_active !== undefined ? (is_active ? 1 : 0) : 1)
             .query(`
                 UPDATE dbo.attractions
-                SET 
+                SET
                     location_id = @location_id,
                     name = @name,
                     address_line = @address_line,
@@ -329,7 +329,7 @@ async function toggleAttractionStatus(req, res) {
             .input("id", sql.Int, id)
             .query(`
                 UPDATE dbo.attractions
-                SET 
+                SET
                     is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END,
                     updated_at = SYSDATETIME()
                 OUTPUT INSERTED.id, INSERTED.name, INSERTED.is_active

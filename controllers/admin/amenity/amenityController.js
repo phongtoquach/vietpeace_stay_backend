@@ -149,7 +149,7 @@ async function updateAmenity(req, res) {
                 "description",
                 sqlObj.NVarChar(1000),
                 description?.trim() || null
-            )   
+            )
             .input("is_active", sqlObj.Bit, activeStatus)
             .query(`
                 UPDATE dbo.amenities

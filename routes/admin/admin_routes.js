@@ -25,14 +25,18 @@ router.use("/auth", authRoutes);
  */
 const accommodationAdminRoutes = require("./accommodation_admin_routes");
 router.use("/accommodations", requireAdminLogin, accommodationAdminRoutes);
+const lookupAdminRoutes = require("./lookup_admin_routes");
+router.use("/lookup", requireAdminLogin, lookupAdminRoutes);
+const uploadAdminRoutes = require("./upload_admin_routes");
+router.use("/uploads", requireAdminLogin, uploadAdminRoutes);
 
 
 /**
  * ADMIN ROOM-TYPE
  * /api/admin/room-types/*
  */
-//const roomTypeAdminRoutes = require("./roomType_admin_routes");
-//router.use("/room-types", requireAdminLogin, roomTypeAdminRoutes);
+const roomTypeAdminRoutes = require("./room_type_admin_routes");
+router.use("/room-types", requireAdminLogin, roomTypeAdminRoutes);
 
 
 /**

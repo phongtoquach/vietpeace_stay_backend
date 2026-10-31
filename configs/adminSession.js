@@ -2,8 +2,6 @@
  * Session dành cho user login (đội ngũ nhân viên, quản lý của VietPeace Stay) trên Admin Panel
  */
 
-console.log("[adminSession] secret : " + process.env.ADMIN_SESSION_SECRET);
-
 const session = require("express-session");
 
 const adminSession = session({

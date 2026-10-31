@@ -55,7 +55,7 @@ async function getLocationsList(req, res) {
         const pool = getDBPool();
 
         const result = await pool.request().query(`
-            SELECT 
+            SELECT
                 l.id,
                 l.province_id,
                 p.name AS province_name,
@@ -104,7 +104,7 @@ async function getLocationDetail(req, res) {
         const result = await pool.request()
             .input("id", sql.Int, id)
             .query(`
-                SELECT 
+                SELECT
                     l.*,
                     p.name AS province_name,
                     li.image_url
@@ -241,12 +241,12 @@ async function createLocation(req, res) {
             .input("is_active", sql.Bit, isActive)
             .query(`
                 INSERT INTO dbo.locations (
-                    province_id, parent_id, name, slug, short_description, 
+                    province_id, parent_id, name, slug, short_description,
                     description, is_featured, sort_order, is_active, created_at
                 )
                 OUTPUT INSERTED.*
                 VALUES (
-                    @province_id, @parent_id, @name, @slug, @short_description, 
+                    @province_id, @parent_id, @name, @slug, @short_description,
                     @description, @is_featured, @sort_order, @is_active, SYSDATETIME()
                 );
             `);
@@ -380,7 +380,7 @@ async function updateLocation(req, res) {
             .input("is_active", sql.Bit, isActive)
             .query(`
                 UPDATE dbo.locations
-                SET 
+                SET
                     province_id = @province_id,
                     parent_id = @parent_id,
                     name = @name,

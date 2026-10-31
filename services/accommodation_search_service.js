@@ -66,14 +66,14 @@ function parseInteger(value, field, errors, defaultValue = null, min = 1) {
 		return null;
 	}
 
-  	const number = Number(value);
+     const number = Number(value);
 
 	if (!Number.isSafeInteger(number) || number < min || number > 2147483647) {
 		errors[field] = `${field} phải nằm trong khoảng ${min} đến 2147483647.`;
 		return null;
 	}
 
-  	return number;
+     return number;
 }
 
 function parseDate(value, field, errors) {
@@ -106,14 +106,14 @@ function parsePrice(value, field, errors) {
 		return null;
 	}
 
-  	const price = Number(value);
+     const price = Number(value);
 
 	if (!Number.isFinite(price) || price > Number.MAX_SAFE_INTEGER) {
 		errors[field] = `${field} vượt giới hạn cho phép.`;
 		return null;
 	}
 
-  	return price;
+     return price;
 }
 
 function parseIdList(value, field, errors, maxValue = 2147483647) {
@@ -303,7 +303,7 @@ function normalizeSort(sort) {
 		);
 	}
 
-  	const normalized = sort.trim().toLowerCase();
+     const normalized = sort.trim().toLowerCase();
 
 	if (!Object.hasOwn(SORT_OPTIONS, normalized)) {
 		return failure("DATA_INVALID", "Lựa chọn sắp xếp không hợp lệ.", {
@@ -448,7 +448,7 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 	}
 
 	// if (filters.accommodationTypeId !== null) {
-	// 	conditions.push("a.accommodation_type_id = @accommodationTypeId");
+	//    conditions.push("a.accommodation_type_id = @accommodationTypeId");
 	// }
 
 	if (filters.accommodationTypeIds.length > 0) {
@@ -735,10 +735,10 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 		FROM dbo.accommodations AS a
 
 		INNER JOIN dbo.accommodation_types AS at ON at.id = a.accommodation_type_id
-		
+
 		LEFT JOIN dbo.locations AS loc ON loc.id = a.location_id
-      	LEFT JOIN dbo.provinces AS province ON province.id = loc.province_id
-      	LEFT JOIN dbo.wards AS ward ON ward.id = a.ward_id
+         LEFT JOIN dbo.provinces AS province ON province.id = loc.province_id
+         LEFT JOIN dbo.wards AS ward ON ward.id = a.ward_id
 
 		WHERE ${conditions.join("\n AND ")}
 		),
