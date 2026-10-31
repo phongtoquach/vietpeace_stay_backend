@@ -1012,6 +1012,9 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 
 	const items = accommodationRows.map((accommodation) => ({
 		...accommodation,
+
+		available_rooms: accommodation.available_rooms === null ? null : Number(accommodation.available_rooms),
+
 		images: imagesByAccommodation[accommodation.id] ?? [],
 		amenities: amenitiesByAccommodation[accommodation.id] ?? []
 	}));
