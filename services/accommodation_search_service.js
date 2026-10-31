@@ -419,6 +419,7 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 	pagination = paginationValidation.pagination;
 
 	const hasDates = filters.checkinDate !== null;
+	//const hasDates = filters.checkinDate !== null && filters.checkoutDate !== null;
 	const hasAccommodationId = filters.accommodationId !== null;
 
 	// Tìm đích danh accommodation: không loại vì thiếu phòng.
@@ -722,9 +723,9 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 			a.location_id,
 			loc.name AS location_name,
 			loc.province_id AS loc_province_id,
-			province.name AS loc_province_name,
-			a.ward_id,
-			ward.name AS ward_name,
+			province.full_name AS loc_province_fullname,
+			a.ward_id AS loc_ward_id,
+			ward.full_name AS loc_ward_fullname,
 
 			a.address_line,
 			a.short_description,
@@ -925,9 +926,7 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 	const total = result.recordsets[0][0].total;
 	const items = result.recordsets[1];
 
-	const totalPages = pagination.enabled
-		? Math.ceil(total / pagination.pageSize)
-		: (total > 0 ? 1 : 0);
+	const totalPages = pagination.enabled ? Math.ceil(total / pagination.pageSize) : (total > 0 ? 1 : 0);
 
 	return {
 		success: true,
