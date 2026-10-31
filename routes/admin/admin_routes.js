@@ -49,7 +49,8 @@ router.use("/locations", requireAdminLogin, locationAdminRoutes);
 const attractionAdminRoutes = require("./attraction_admin_routes");
 router.use("/attractions", requireAdminLogin, attractionAdminRoutes);
 
-
+const amenityAdminRoutes = require("./amenity_admin_routes");
+router.use("/amenities", requireAdminLogin, amenityAdminRoutes);
 
 
 
