@@ -1272,6 +1272,247 @@ async function updateAccommodation(id, body = {}, currentUser = {}) {
 }
 
 /**
+ * PATCH /api/admin/accommodations/:id/status
+ * status = 1 (ACTIVE) phải có ảnh bìa.
+ */
+async function updateAccommodationStatus(id, status, currentUser = {}) {
+  const accommodationId = parsePositiveInt(id);
+  if (!accommodationId) {
+    throw new AccommodationServiceError(
+      "ID cơ sở lưu trú không hợp lệ.",
+      400,
+      ERROR_CODES.VALIDATION_ERROR,
+      { id: "ID phải là số nguyên dương." },
+    );
+  }
+
+  const nextStatus = Number(status);
+  const allowedStatuses = Object.values(ACCOMMODATION_STATUS);
+  if (!Number.isInteger(nextStatus) || !allowedStatuses.includes(nextStatus)) {
+    throw new AccommodationServiceError(
+      "Trạng thái không hợp lệ.",
+      400,
+      ERROR_CODES.VALIDATION_ERROR,
+      { status: "Trạng thái phải là 0, 1 hoặc 2." },
+    );
+  }
+
+  console.group("[updateAccommodationStatus]");
+  console.log("[1] input:", {
+    id: accommodationId,
+    status: nextStatus,
+    role: currentUser.role,
+  });
+
+  let transaction = null;
+
+  try {
+    transaction = new sql.Transaction(getDBPool());
+    await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
+
+    const result = await new sql.Request(transaction)
+      .input("id", sql.Int, accommodationId)
+      .input("status", sql.TinyInt, nextStatus)
+      .query(`
+        UPDATE dbo.accommodations
+        SET status = @status,
+            updated_at = SYSDATETIME()
+        WHERE id = @id AND deleted_at IS NULL;
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      throw new AccommodationServiceError(
+        "Không tìm thấy cơ sở lưu trú.",
+        404,
+        ERROR_CODES.NOT_FOUND,
+      );
+    }
+
+    // Chỉ kiểm tra ảnh bìa khi chuyển sang ACTIVE.
+    // Thiếu ảnh → 409, rollback trả status về giá trị cũ.
+    if (nextStatus === ACCOMMODATION_STATUS.ACTIVE) {
+      await assertPublishable(transaction, accommodationId);
+    }
+
+    await transaction.commit();
+    console.log("[2] commit OK");
+
+    return {
+      id: accommodationId,
+      status: nextStatus,
+      statusLabel: ACCOMMODATION_STATUS_LABEL[nextStatus],
+    };
+  } catch (error) {
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error("[3] rollback thất bại:", rollbackError.message);
+      }
+    }
+    throw error;
+  } finally {
+    console.groupEnd();
+  }
+}
+
+/**
+ * PATCH /api/admin/accommodations/:id/featured
+ * Chỉ 1 câu UPDATE nên không cần transaction.
+ */
+async function updateAccommodationFeatured(id, isFeatured, currentUser = {}) {
+  const accommodationId = parsePositiveInt(id);
+  if (!accommodationId) {
+    throw new AccommodationServiceError(
+      "ID cơ sở lưu trú không hợp lệ.",
+      400,
+      ERROR_CODES.VALIDATION_ERROR,
+      { id: "ID phải là số nguyên dương." },
+    );
+  }
+
+  if (typeof isFeatured !== "boolean") {
+    throw new AccommodationServiceError(
+      "Dữ liệu không hợp lệ.",
+      400,
+      ERROR_CODES.VALIDATION_ERROR,
+      { isFeatured: "isFeatured phải là true hoặc false." },
+    );
+  }
+
+  console.group("[updateAccommodationFeatured]");
+  console.log("[1] input:", {
+    id: accommodationId,
+    isFeatured,
+    role: currentUser.role,
+  });
+
+  try {
+    const result = await getDBPool()
+      .request()
+      .input("id", sql.Int, accommodationId)
+      .input("isFeatured", sql.Bit, isFeatured)
+      .query(`
+        UPDATE dbo.accommodations
+        SET is_featured = @isFeatured,
+            updated_at = SYSDATETIME()
+        WHERE id = @id AND deleted_at IS NULL;
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      throw new AccommodationServiceError(
+        "Không tìm thấy cơ sở lưu trú.",
+        404,
+        ERROR_CODES.NOT_FOUND,
+      );
+    }
+
+    console.log("[2] cập nhật OK");
+    return { id: accommodationId, isFeatured };
+  } finally {
+    console.groupEnd();
+  }
+}
+
+/**
+ * DELETE /api/admin/accommodations/:id
+ * Xóa mềm; chặn nếu còn room type đang hoạt động, trừ khi force=true (ADMIN).
+ */
+async function deleteAccommodation(id, { force = false } = {}, currentUser = {}) {
+  const accommodationId = parsePositiveInt(id);
+  if (!accommodationId) {
+    throw new AccommodationServiceError(
+      "ID cơ sở lưu trú không hợp lệ.",
+      400,
+      ERROR_CODES.VALIDATION_ERROR,
+      { id: "ID phải là số nguyên dương." },
+    );
+  }
+
+  const isAdmin = currentUser.role === "ADMIN";
+  if (force && !isAdmin) {
+    throw new AccommodationServiceError(
+      "Chỉ ADMIN được xóa cưỡng bức.",
+      403,
+      ERROR_CODES.FORBIDDEN,
+    );
+  }
+
+  console.group("[deleteAccommodation]");
+  console.log("[1] input:", {
+    id: accommodationId,
+    force,
+    role: currentUser.role,
+  });
+
+  try {
+    const pool = getDBPool();
+
+    const existsResult = await pool
+      .request()
+      .input("id", sql.Int, accommodationId)
+      .query(`
+        SELECT id
+        FROM dbo.accommodations
+        WHERE id = @id AND deleted_at IS NULL;
+      `);
+
+    if (existsResult.recordset.length === 0) {
+      throw new AccommodationServiceError(
+        "Không tìm thấy cơ sở lưu trú.",
+        404,
+        ERROR_CODES.NOT_FOUND,
+      );
+    }
+
+    if (!force) {
+      const activeRoomTypes = await pool
+        .request()
+        .input("id", sql.Int, accommodationId)
+        .query(`
+          SELECT COUNT(*) AS count
+          FROM dbo.room_types
+          WHERE accommodation_id = @id
+            AND status = 1
+            AND deleted_at IS NULL;
+        `);
+
+      if (activeRoomTypes.recordset[0].count > 0) {
+        throw new AccommodationServiceError(
+          "Không thể xóa cơ sở lưu trú vì còn loại phòng đang hoạt động.",
+          409,
+          ERROR_CODES.INVALID_STATE,
+          { roomTypes: "Còn loại phòng đang hoạt động." },
+        );
+      }
+    }
+
+    const result = await pool
+      .request()
+      .input("id", sql.Int, accommodationId)
+      .query(`
+        UPDATE dbo.accommodations
+        SET deleted_at = SYSDATETIME(),
+            updated_at = SYSDATETIME()
+        WHERE id = @id AND deleted_at IS NULL;
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      throw new AccommodationServiceError(
+        "Không tìm thấy cơ sở lưu trú.",
+        404,
+        ERROR_CODES.NOT_FOUND,
+      );
+    }
+
+    console.log("[2] đã xóa mềm");
+    return { id: accommodationId };
+  } finally {
+    console.groupEnd();
+  }
+}
+
+/**
  * Chuyển một giá trị query thành số nguyên dương.
  *
  * Ví dụ:
@@ -2455,6 +2696,9 @@ module.exports = {
   getAccommodationStats,
   createAccommodation,
   updateAccommodation,
+  updateAccommodationStatus,
+  updateAccommodationFeatured,
+  deleteAccommodation,
   validateAccommodationPayload,
   resolveLocationContext,
   mapSummaryRow,

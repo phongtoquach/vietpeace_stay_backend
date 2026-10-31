@@ -134,6 +134,73 @@ async function updateAccommodation(req, res) {
   }
 }
 
+async function updateAccommodationStatus(req, res) {
+  try {
+    const result = await accommodationService.updateAccommodationStatus(
+      req.params.id,
+      req.body.status,
+      req.session.admin,
+    );
+    return ok(res, result, "Cập nhật trạng thái cơ sở lưu trú thành công.");
+  } catch (error) {
+    console.error("[updateAccommodationStatus] Lỗi:", error);
+    if (error.statusCode && error.errorCode) {
+      return fail(res, error.statusCode, error.errorCode, error.message, error.errors);
+    }
+    return fail(
+      res,
+      500,
+      "INTERNAL_ERROR",
+      "Đã xảy ra lỗi khi cập nhật trạng thái cơ sở lưu trú.",
+    );
+  }
+}
+
+async function updateAccommodationFeatured(req, res) {
+  try {
+    const result = await accommodationService.updateAccommodationFeatured(
+      req.params.id,
+      req.body.isFeatured,
+      req.session.admin,
+    );
+    return ok(res, result, "Cập nhật trạng thái nổi bật thành công.");
+  } catch (error) {
+    console.error("[updateAccommodationFeatured] Lỗi:", error);
+    if (error.statusCode && error.errorCode) {
+      return fail(res, error.statusCode, error.errorCode, error.message, error.errors);
+    }
+    return fail(
+      res,
+      500,
+      "INTERNAL_ERROR",
+      "Đã xảy ra lỗi khi cập nhật trạng thái nổi bật.",
+    );
+  }
+}
+
+async function deleteAccommodation(req, res) {
+  try {
+    const force = req.query.force === "true";
+    const result = await accommodationService.deleteAccommodation(
+      req.params.id,
+      { force },
+      req.session.admin,
+    );
+    return ok(res, result, "Đã xóa cơ sở lưu trú.");
+  } catch (error) {
+    console.error("[deleteAccommodation] Lỗi:", error);
+    if (error.statusCode && error.errorCode) {
+      return fail(res, error.statusCode, error.errorCode, error.message, error.errors);
+    }
+    return fail(
+      res,
+      500,
+      "INTERNAL_ERROR",
+      "Đã xảy ra lỗi khi xóa cơ sở lưu trú.",
+    );
+  }
+}
+
 async function getAccommodationStats(req, res) {
   try {
     const result = await accommodationService.getAccommodationStats(
@@ -169,4 +236,7 @@ module.exports = {
   getAccommodationStats,
   createAccommodation,
   updateAccommodation,
+  updateAccommodationStatus,
+  updateAccommodationFeatured,
+  deleteAccommodation,
 };

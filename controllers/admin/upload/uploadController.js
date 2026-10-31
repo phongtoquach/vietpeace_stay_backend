@@ -10,4 +10,17 @@ function uploadAccommodationImage(req, res) {
   return res.status(201).json({ data: { url: relativeUrl } });
 }
 
-module.exports = { uploadAccommodationImage };
+function uploadRoomTypeImage(req, res) {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: "Vui lòng chọn ảnh.",
+      errorCode: "VALIDATION_ERROR",
+    });
+  }
+
+  const relativeUrl = `/uploads/room_types/${req.file.filename}`;
+  return res.status(201).json({ data: { url: relativeUrl } });
+}
+
+module.exports = { uploadAccommodationImage, uploadRoomTypeImage };
