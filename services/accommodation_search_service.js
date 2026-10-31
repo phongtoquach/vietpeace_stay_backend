@@ -959,7 +959,7 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 
 			-- Recordset 2: các tiện nghi và thông tin gắn với
 			-- accommodation như phụ thu/ghi chú.
-			SELECT aa.accommodation_id, aa.amenity_id, amenity.code, amenity.category_code, amenity.icon_key, amenity.description, aa.is_chargeable, aa.note AS accommodation_note
+			SELECT aa.accommodation_id, aa.amenity_id, amenity.name, amenity.code, amenity.category_code, amenity.icon_key, amenity.description, aa.is_chargeable, aa.note AS accommodation_note
 			FROM dbo.accommodation_amenities AS aa
 
 			INNER JOIN dbo.amenities AS amenity ON amenity.id = aa.amenity_id
