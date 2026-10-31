@@ -923,8 +923,98 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 
 	const result = await request.query(query);
 
+	//console.log("[searchAccommodationsByFilters] data cua result.recordsets[0] : ");
+	//console.log(result.recordsets[0]);
+	//console.log("[searchAccommodationsByFilters] data cua result.recordsets[1] : ");
+	//console.log(result.recordsets[1]);
+
 	const total = result.recordsets[0][0].total;
-	const items = result.recordsets[1];
+	//const items = result.recordsets[1];
+
+	const accommodationRows = result.recordsets[1];
+
+	// Chỉ lấy dữ liệu liên quan cho các accommodation đã được lọc, sort và phân trang ở query chính
+	const imagesByAccommodation = {};
+	const amenitiesByAccommodation = {};
+
+	if (accommodationRows.length > 0) {
+		const accommodationIds = accommodationRows.map((accommodation) => accommodation.id);
+
+		const relatedResult = await pool.request()
+		.input(
+			"accommodationIds",
+			sqlObj.NVarChar(sqlObj.MAX),
+			JSON.stringify(accommodationIds)
+		)
+		.query(`
+			-- Recordset 1: các hình ảnh.
+			SELECT image.accommodation_id, image.id AS image_id, image.image_url, image.alt_text, image.caption, image.is_cover
+			FROM dbo.accommodation_images AS image
+
+			INNER JOIN OPENJSON(@accommodationIds)
+			WITH (accommodation_id INT '$') AS selectedAccommodation
+			ON selectedAccommodation.accommodation_id = image.accommodation_id
+
+			ORDER BY image.accommodation_id;
+
+			-- Recordset 2: các tiện nghi và thông tin gắn với
+			-- accommodation như phụ thu/ghi chú.
+			SELECT aa.accommodation_id, aa.amenity_id, amenity.code, amenity.category_code, amenity.icon_key, amenity.description, aa.is_chargeable, aa.note AS accommodation_note
+			FROM dbo.accommodation_amenities AS aa
+
+			INNER JOIN dbo.amenities AS amenity ON amenity.id = aa.amenity_id
+
+			INNER JOIN OPENJSON(@accommodationIds)
+			WITH (accommodation_id INT '$') AS selectedAccommodation
+			ON selectedAccommodation.accommodation_id = aa.accommodation_id
+
+			ORDER BY aa.accommodation_id, amenity.id;
+		`);
+
+		const imageRows = relatedResult.recordsets[0];
+		const amenityRows = relatedResult.recordsets[1];
+
+		//console.log("Data của imageRows : ");
+		//console.log(imageRows);
+
+		for (const image of imageRows) {
+			const accommodationId = image.accommodation_id;
+			if (!imagesByAccommodation[accommodationId]) {
+				imagesByAccommodation[accommodationId] = [];
+			}
+
+			const imageObj = {
+				image_id: Number(image.image_id),
+				image_url: image.image_url,
+				alt_text: image.alt_text,
+				caption: image.caption,
+				is_cover: image.is_cover
+			}
+
+			imagesByAccommodation[accommodationId].push(imageObj);
+		}
+
+		console.log("Data của amenityRows : ");
+		console.log(amenityRows);
+
+		for (const row of amenityRows) {
+			// accommodation_id dùng để gom nhóm.
+			// Các field còn lại là dữ liệu tiện nghi trả frontend.
+			const { accommodation_id: accommodationId, ...amenity } = row;
+
+			if (!amenitiesByAccommodation[accommodationId]) {
+				amenitiesByAccommodation[accommodationId] = [];
+			}
+
+			amenitiesByAccommodation[accommodationId].push(amenity);
+		}
+	}
+
+	const items = accommodationRows.map((accommodation) => ({
+		...accommodation,
+		images: imagesByAccommodation[accommodation.id] ?? [],
+		amenities: amenitiesByAccommodation[accommodation.id] ?? []
+	}));
 
 	const totalPages = pagination.enabled ? Math.ceil(total / pagination.pageSize) : (total > 0 ? 1 : 0);
 
