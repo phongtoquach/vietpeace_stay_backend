@@ -38,4 +38,25 @@ router.use("/uploads", requireAdminLogin, uploadAdminRoutes);
 const roomTypeAdminRoutes = require("./room_type_admin_routes");
 router.use("/room-types", requireAdminLogin, roomTypeAdminRoutes);
 
+
+/**
+ * ADMIN LOCATIONS
+ * /api/admin/locations/*
+ */
+const locationAdminRoutes = require("./location_admin_routes");
+router.use("/locations", requireAdminLogin, locationAdminRoutes);
+
+/**
+ * ADMIN ATTRACTIONS
+ * /api/admin/attractions/*
+ */
+const attractionAdminRoutes = require("./attraction_admin_routes");
+router.use("/attractions", requireAdminLogin, attractionAdminRoutes);
+
+const amenityAdminRoutes = require("./amenity_admin_routes");
+router.use("/amenities", requireAdminLogin, amenityAdminRoutes);
+
+
+
+
 module.exports = router;

@@ -30,7 +30,11 @@ app.use(cors({
 }));
 
 // cho phép app nhận data JSON trong request được gửi đến server đang run app
-app.use(express.json());
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+
+//app.use(express.static("public"));
+// cấu hình đế map folder tĩnh "/public/uploads" vào URL prefix "/uploads"
 app.use("/uploads", express.static(path.join(__dirname, "public", "uploads")));
 
 
