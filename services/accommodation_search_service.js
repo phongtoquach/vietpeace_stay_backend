@@ -720,16 +720,24 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 			at.name AS accommodation_type_name,
 
 			a.location_id,
+			loc.name AS location_name,
+			loc.province_id AS loc_province_id,
+			province.name AS loc_province_name,
+			a.ward_id,
+			ward.name AS ward_name,
+
 			a.address_line,
 			a.short_description,
 			a.star_rating,
-			a.is_featured,
-			a.sort_order
+			a.is_featured
 
 		FROM dbo.accommodations AS a
 
-		INNER JOIN dbo.accommodation_types AS at
-			ON at.id = a.accommodation_type_id
+		INNER JOIN dbo.accommodation_types AS at ON at.id = a.accommodation_type_id
+		
+		LEFT JOIN dbo.locations AS loc ON loc.id = a.location_id
+      	LEFT JOIN dbo.provinces AS province ON province.id = loc.province_id
+      	LEFT JOIN dbo.wards AS ward ON ward.id = a.ward_id
 
 		WHERE ${conditions.join("\n AND ")}
 		),
