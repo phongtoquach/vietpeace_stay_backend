@@ -35,7 +35,7 @@ router.use("/uploads", requireAdminLogin, uploadAdminRoutes);
  * ADMIN ROOM-TYPE
  * /api/admin/room-types/*
  */
-//const roomTypeAdminRoutes = require("./roomType_admin_routes");
-//router.use("/room-types", requireAdminLogin, roomTypeAdminRoutes);
+const roomTypeAdminRoutes = require("./room_type_admin_routes");
+router.use("/room-types", requireAdminLogin, roomTypeAdminRoutes);
 
 module.exports = router;
