@@ -12,7 +12,12 @@ const requireRole = require("../../middlewares/requireRole");
 
 router.get("/", requireAdminLogin, accommodationController.getAccommodationsList);
 router.get("/stats", requireAdminLogin, accommodationController.getAccommodationStats);
-router.post("/", requireAdminLogin, accommodationController.createAccommodation);
+router.post(
+  "/",
+  requireAdminLogin,
+  requireRole("ADMIN"),
+  accommodationController.createAccommodation,
+);
 router.put("/:id", requireAdminLogin, accommodationController.updateAccommodation);
 router.patch(
   "/:id/status",

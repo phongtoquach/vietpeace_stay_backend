@@ -1,5 +1,6 @@
 const { getDBPool, sqlObj } = require("../configs/database");
 const { ERROR_CODES } = require("../constants/error_codes");
+const { getAccommodationScope, assertAccommodationAccess } = require("./accommodation_access_service");
 const {
   ROOM_TYPE_STATUS_LABEL,
   ROOM_TYPE_SORT_FIELD_MAP,
@@ -67,9 +68,13 @@ function mapRoomTypeSummary(row) {
 
 // Dựng WHERE + params dùng chung cho cả COUNT và SELECT.
 // Nhờ vậy total luôn khớp đúng bộ lọc của trang hiện tại.
-function buildListFilters(query) {
+function buildListFilters(query, currentUser = {}) {
   const whereParts = ["rt.deleted_at IS NULL", "a.deleted_at IS NULL"];
   const params = [];
+
+  const scope = getAccommodationScope(currentUser);
+  whereParts.push(scope.condition);
+  params.push(...scope.inputs);
 
   const q = typeof query.q === "string" ? query.q.trim() : "";
   if (q) {
@@ -108,7 +113,7 @@ function bindParams(request, params) {
   return request;
 }
 
-async function getRoomTypeList(query = {}) {
+async function getRoomTypeList(query = {}, currentUser = {}) {
   console.group("[getRoomTypeList]");
 
   try {
@@ -124,7 +129,7 @@ async function getRoomTypeList(query = {}) {
     // Thêm tie-breaker để thứ tự ổn định khi hai dòng cùng giá trị sort.
     const tieBreaker = sortColumn === "rt.id" ? "" : ", rt.id ASC";
 
-    const { whereSql, params } = buildListFilters(query);
+    const { whereSql, params } = buildListFilters(query, currentUser);
 
     console.log("[1] filter:", {
       q: query.q || null,
@@ -269,7 +274,7 @@ function mapRoomTypeRateRow(row) {
   };
 }
 
-async function getRoomTypeDetail(id) {
+async function getRoomTypeDetail(id, currentUser = {}) {
   console.group("[getRoomTypeDetail]");
 
   try {
@@ -286,11 +291,15 @@ async function getRoomTypeDetail(id) {
     console.log("[1] id:", roomTypeId);
 
     const pool = getDBPool();
+    const scope = getAccommodationScope(currentUser);
+    const scopeSql = `AND ${scope.condition}`;
+    const mainRequest = pool.request().input("id", sql.Int, roomTypeId);
 
-    const mainResult = await pool
-      .request()
-      .input("id", sql.Int, roomTypeId)
-      .query(`
+    for (const input of scope.inputs) {
+      mainRequest.input(input.name, input.type, input.value);
+    }
+
+    const mainResult = await mainRequest.query(`
         SELECT
           rt.id,
           rt.accommodation_id,
@@ -321,7 +330,8 @@ async function getRoomTypeDetail(id) {
         JOIN dbo.accommodations a ON a.id = rt.accommodation_id
         WHERE rt.id = @id
           AND rt.deleted_at IS NULL
-          AND a.deleted_at IS NULL;
+          AND a.deleted_at IS NULL
+          ${scopeSql};
       `);
 
     if (mainResult.recordset.length === 0) {
@@ -779,25 +789,6 @@ function validateRoomTypePayload(body = {}, { isCreate = false } = {}) {
   return values;
 }
 
-async function resolveRoomTypeAccommodation(accommodationId) {
-  const result = await getDBPool()
-    .request()
-    .input("id", sql.Int, accommodationId)
-    .query(`
-      SELECT id, accommodation_name
-      FROM dbo.accommodations
-      WHERE id = @id AND deleted_at IS NULL;
-    `);
-
-  if (result.recordset.length === 0) {
-    throw validationError({
-      accommodationId: "Cơ sở lưu trú không tồn tại.",
-    });
-  }
-
-  return result.recordset[0];
-}
-
 async function assertRoomTypeCodeAvailable(accommodationId, code, excludeId = null) {
   // Không lọc deleted_at vì UNIQUE constraint của DB vẫn tính bản ghi đã xóa mềm.
   const result = await getDBPool()
@@ -936,24 +927,25 @@ async function replaceRoomTypeWeekdayRates(transaction, roomTypeId, rates = []) 
   }
 }
 
-async function createRoomType(body = {}) {
+async function createRoomType(body = {}, currentUser = {}) {
   console.group("[createRoomType]");
 
   try {
     const values = validateRoomTypePayload(body, { isCreate: true });
     console.log("[1] payload hợp lệ:", Object.keys(values));
 
-    await resolveRoomTypeAccommodation(values.accommodationId);
+    await assertAccommodationAccess(values.accommodationId, currentUser);
     await assertRoomTypeCodeAvailable(values.accommodationId, values.code);
 
     const pool = getDBPool();
+    const scope = getAccommodationScope(currentUser);
     const transaction = new sql.Transaction(pool);
     await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
 
     let newId;
 
     try {
-      const insertResult = await new sql.Request(transaction)
+      const insertRequest = new sql.Request(transaction)
         .input("accommodationId", sql.Int, values.accommodationId)
         .input("code", sql.VarChar(255), values.code)
         .input("name", sql.NVarChar(255), values.name)
@@ -973,8 +965,13 @@ async function createRoomType(body = {}) {
         .input("extraAdultFee", sql.Decimal(18, 2), values.extraAdultFee)
         .input("extraChildFee", sql.Decimal(18, 2), values.extraChildFee)
         .input("status", sql.TinyInt, values.status)
-        .input("sortOrder", sql.Int, values.sortOrder)
-        .query(`
+        .input("sortOrder", sql.Int, values.sortOrder);
+
+      for (const input of scope.inputs) {
+        insertRequest.input(input.name, input.type, input.value);
+      }
+
+      const insertResult = await insertRequest.query(`
           INSERT INTO dbo.room_types (
             accommodation_id, code, name, short_description, description,
             quantity, base_price, area_sqm, bed_description,
@@ -983,16 +980,29 @@ async function createRoomType(body = {}) {
             extra_adult_fee, extra_child_fee, status, sort_order
           )
           OUTPUT INSERTED.id
-          VALUES (
+          SELECT
             @accommodationId, @code, @name, @shortDescription, @description,
             @quantity, @basePrice, @areaSqm, @bedDescription,
             @bedroomCount, @bathroomCount,
             @includedAdults, @includedChildren, @maxAdults, @maxChildren, @maxOccupancy,
             @extraAdultFee, @extraChildFee, @status, @sortOrder
+          WHERE EXISTS (
+            SELECT 1
+            FROM dbo.accommodations a
+            WHERE a.id = @accommodationId
+              AND a.deleted_at IS NULL
+              AND ${scope.condition}
           );
         `);
 
-      newId = insertResult.recordset[0].id;
+      newId = insertResult.recordset[0]?.id;
+      if (!newId) {
+        throw new RoomTypeServiceError(
+          404,
+          ERROR_CODES.NOT_FOUND,
+          "Không tìm thấy cơ sở lưu trú.",
+        );
+      }
 
       await replaceRoomTypeImages(transaction, newId, values.images);
       await replaceRoomTypeAmenities(transaction, newId, values.amenities);
@@ -1005,13 +1015,13 @@ async function createRoomType(body = {}) {
       throw mapRoomTypeSqlError(error);
     }
 
-    return await getRoomTypeDetail(newId);
+    return await getRoomTypeDetail(newId, currentUser);
   } finally {
     console.groupEnd();
   }
 }
 
-async function updateRoomType(id, body = {}) {
+async function updateRoomType(id, body = {}, currentUser = {}) {
   const roomTypeId = parsePositiveInt(id);
   if (!roomTypeId) {
     throw validationError({
@@ -1022,7 +1032,7 @@ async function updateRoomType(id, body = {}) {
   console.group("[updateRoomType]");
 
   try {
-    const current = await getRoomTypeDetail(roomTypeId);
+    const current = await getRoomTypeDetail(roomTypeId, currentUser);
     const values = validateRoomTypePayload(body, { isCreate: false });
 
     const pick = (field, fallback) =>
@@ -1057,7 +1067,7 @@ async function updateRoomType(id, body = {}) {
       throw validationError(errors);
     }
 
-    await resolveRoomTypeAccommodation(merged.accommodationId);
+    await assertAccommodationAccess(merged.accommodationId, currentUser);
     await assertRoomTypeCodeAvailable(
       merged.accommodationId,
       merged.code,
@@ -1069,7 +1079,9 @@ async function updateRoomType(id, body = {}) {
     await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
 
     try {
-      await new sql.Request(transaction)
+      const currentScope = getAccommodationScope(currentUser, "rtaccom");
+      const destinationScope = getAccommodationScope(currentUser, "dest");
+      const updateRequest = new sql.Request(transaction)
         .input("id", sql.Int, roomTypeId)
         .input("accommodationId", sql.Int, merged.accommodationId)
         .input("code", sql.VarChar(255), merged.code)
@@ -1090,9 +1102,14 @@ async function updateRoomType(id, body = {}) {
         .input("extraAdultFee", sql.Decimal(18, 2), merged.extraAdultFee)
         .input("extraChildFee", sql.Decimal(18, 2), merged.extraChildFee)
         .input("status", sql.TinyInt, merged.status)
-        .input("sortOrder", sql.Int, merged.sortOrder)
-        .query(`
-          UPDATE dbo.room_types
+        .input("sortOrder", sql.Int, merged.sortOrder);
+
+      for (const input of currentScope.inputs) {
+        updateRequest.input(input.name, input.type, input.value);
+      }
+
+      const updateResult = await updateRequest.query(`
+          UPDATE rt
           SET accommodation_id = @accommodationId,
               code = @code,
               name = @name,
@@ -1114,8 +1131,29 @@ async function updateRoomType(id, body = {}) {
               status = @status,
               sort_order = @sortOrder,
               updated_at = SYSDATETIME()
-          WHERE id = @id AND deleted_at IS NULL;
+          FROM dbo.room_types rt
+          JOIN dbo.accommodations rtaccom
+            ON rtaccom.id = rt.accommodation_id
+          WHERE rt.id = @id
+            AND rt.deleted_at IS NULL
+            AND rtaccom.deleted_at IS NULL
+            AND ${currentScope.condition}
+            AND EXISTS (
+              SELECT 1
+              FROM dbo.accommodations dest
+              WHERE dest.id = @accommodationId
+                AND dest.deleted_at IS NULL
+                AND ${destinationScope.condition}
+            );
         `);
+
+      if (!updateResult.rowsAffected[0]) {
+        throw new RoomTypeServiceError(
+          404,
+          ERROR_CODES.NOT_FOUND,
+          "Không tìm thấy loại phòng.",
+        );
+      }
 
       if (values.images !== undefined) {
         await replaceRoomTypeImages(transaction, roomTypeId, values.images);
@@ -1138,7 +1176,7 @@ async function updateRoomType(id, body = {}) {
       throw mapRoomTypeSqlError(error);
     }
 
-    return await getRoomTypeDetail(roomTypeId);
+    return await getRoomTypeDetail(roomTypeId, currentUser);
   } finally {
     console.groupEnd();
   }

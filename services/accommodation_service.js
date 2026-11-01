@@ -19,6 +19,9 @@ const { formatTime, formatDateTime } = require("../utils/datetime");
 // Sinh slug + đảm bảo slug không trùng.
 const { toSlug, ensureUniqueSlug } = require("../utils/slug");
 
+// Scope ownership: ADMIN toàn hệ thống, manager theo accommodation_managers.
+const { getAccommodationScope } = require("./accommodation_access_service");
+
 /**
  * Lỗi riêng của service accommodation.
  *
@@ -1207,8 +1210,20 @@ async function updateAccommodation(id, body = {}, currentUser = {}) {
   try {
     const values = validateAccommodationPayload(body, { isCreate: false });
     const pool = getDBPool();
-    const currentResult = await pool.request().input("accommodationId", sql.Int, accommodationId).query(`
-      SELECT * FROM dbo.accommodations WHERE id = @accommodationId AND deleted_at IS NULL;
+    const scope = getAccommodationScope(currentUser);
+    const currentRequest = pool
+      .request()
+      .input("accommodationId", sql.Int, accommodationId);
+
+    for (const input of scope.inputs) {
+      currentRequest.input(input.name, input.type, input.value);
+    }
+
+    const currentResult = await currentRequest.query(`
+      SELECT * FROM dbo.accommodations a
+      WHERE a.id = @accommodationId
+        AND a.deleted_at IS NULL
+        AND ${scope.condition};
     `);
     if (!currentResult.recordset.length) {
       throw new AccommodationServiceError("Không tìm thấy cơ sở lưu trú.", 404, ERROR_CODES.NOT_FOUND);
@@ -1246,11 +1261,19 @@ async function updateAccommodation(id, body = {}, currentUser = {}) {
       .input("checkInTime", sql.Time, toSqlTime(payload.checkInTime)).input("checkOutTime", sql.Time, toSqlTime(payload.checkOutTime)).input("checkInInstructions", sql.NVarChar(4000), payload.checkInInstructions)
       .input("houseRules", sql.NVarChar(sql.MAX), payload.houseRules).input("childrenPolicy", sql.NVarChar(2000), payload.childrenPolicy).input("petPolicy", sql.NVarChar(2000), payload.petPolicy).input("smokingPolicy", sql.NVarChar(2000), payload.smokingPolicy)
       .input("status", sql.TinyInt, payload.status).input("isFeatured", sql.Bit, payload.isFeatured).input("sortOrder", sql.Int, payload.sortOrder);
+
+    for (const input of scope.inputs) {
+      request.input(input.name, input.type, input.value);
+    }
+
     const result = await request.query(`
-      UPDATE dbo.accommodations SET accommodation_code=@code, accommodation_name=@name, slug=@slug, accommodation_type_id=@typeId, location_id=@locationId, province_id=@provinceId, ward_id=@wardId,
+      UPDATE a SET accommodation_code=@code, accommodation_name=@name, slug=@slug, accommodation_type_id=@typeId, location_id=@locationId, province_id=@provinceId, ward_id=@wardId,
       address_line=@addressLine, postal_code=@postalCode, latitude=@latitude, longitude=@longitude, directions=@directions, short_description=@shortDescription, description=@description, phone=@phone, email=@email,
       website_url=@websiteUrl, star_rating=@starRating, check_in_time=@checkInTime, check_out_time=@checkOutTime, check_in_instructions=@checkInInstructions, house_rules=@houseRules, children_policy=@childrenPolicy,
-      pet_policy=@petPolicy, smoking_policy=@smokingPolicy, status=@status, is_featured=@isFeatured, sort_order=@sortOrder, updated_at=SYSDATETIME() WHERE id=@id AND deleted_at IS NULL;
+      pet_policy=@petPolicy, smoking_policy=@smokingPolicy, status=@status, is_featured=@isFeatured, sort_order=@sortOrder, updated_at=SYSDATETIME()
+      FROM dbo.accommodations a
+      WHERE a.id=@id AND a.deleted_at IS NULL
+        AND ${scope.condition};
     `);
     if (!result.rowsAffected[0]) throw new AccommodationServiceError("Không tìm thấy cơ sở lưu trú.", 404, ERROR_CODES.NOT_FOUND);
     if (has("images")) await replaceImages(transaction, accommodationId, values.images);
@@ -1310,14 +1333,22 @@ async function updateAccommodationStatus(id, status, currentUser = {}) {
     transaction = new sql.Transaction(getDBPool());
     await transaction.begin(sql.ISOLATION_LEVEL.READ_COMMITTED);
 
-    const result = await new sql.Request(transaction)
+    const scope = getAccommodationScope(currentUser);
+    const request = new sql.Request(transaction)
       .input("id", sql.Int, accommodationId)
-      .input("status", sql.TinyInt, nextStatus)
-      .query(`
-        UPDATE dbo.accommodations
+      .input("status", sql.TinyInt, nextStatus);
+
+    for (const input of scope.inputs) {
+      request.input(input.name, input.type, input.value);
+    }
+
+    const result = await request.query(`
+        UPDATE a
         SET status = @status,
             updated_at = SYSDATETIME()
-        WHERE id = @id AND deleted_at IS NULL;
+        FROM dbo.accommodations a
+        WHERE a.id = @id AND a.deleted_at IS NULL
+          AND ${scope.condition};
       `);
 
     if (result.rowsAffected[0] === 0) {
@@ -1388,15 +1419,23 @@ async function updateAccommodationFeatured(id, isFeatured, currentUser = {}) {
   });
 
   try {
-    const result = await getDBPool()
+    const scope = getAccommodationScope(currentUser);
+    const request = getDBPool()
       .request()
       .input("id", sql.Int, accommodationId)
-      .input("isFeatured", sql.Bit, isFeatured)
-      .query(`
-        UPDATE dbo.accommodations
+      .input("isFeatured", sql.Bit, isFeatured);
+
+    for (const input of scope.inputs) {
+      request.input(input.name, input.type, input.value);
+    }
+
+    const result = await request.query(`
+        UPDATE a
         SET is_featured = @isFeatured,
             updated_at = SYSDATETIME()
-        WHERE id = @id AND deleted_at IS NULL;
+        FROM dbo.accommodations a
+        WHERE a.id = @id AND a.deleted_at IS NULL
+          AND ${scope.condition};
       `);
 
     if (result.rowsAffected[0] === 0) {
@@ -1608,9 +1647,9 @@ function mapSummaryRow(row) {
     // Ward có thể không có dữ liệu nên cần trả null.
     ward: row.ward_id
       ? {
-          id: row.ward_id,
-          name: row.ward_name,
-        }
+        id: row.ward_id,
+        name: row.ward_name,
+      }
       : null,
 
     // Thông tin hiển thị danh sách.
@@ -1830,21 +1869,10 @@ async function getAccommodationList(query = {}, currentUser = {}) {
   // Mảng chứa các parameter SQL.
   const params = [];
 
-  /*
-   * Mặc định không lấy cơ sở đã xóa mềm.
-   *
-   * Đây là điều kiện bắt buộc theo AGENT.md.
-   */
   if (!includeDeleted) {
     whereParts.push("a.deleted_at IS NULL");
   }
 
-  /*
-   * Tìm trong:
-   * - tên cơ sở
-   * - mã cơ sở
-   * - địa chỉ
-   */
   if (q) {
     whereParts.push(`
             (
@@ -1915,37 +1943,12 @@ async function getAccommodationList(query = {}, currentUser = {}) {
     sqlType: sql.TinyInt,
   });
 
-  /*
-   * whereParts có thể là:
-   *
-   * [
-   *   "a.deleted_at IS NULL",
-   *   "a.location_id = @locationId",
-   *   "a.status IN (@status0, @status1)"
-   * ]
-   *
-   * Ta nối lại thành:
-   *
-   * WHERE a.deleted_at IS NULL
-   * AND a.location_id = @locationId
-   * AND a.status IN (@status0, @status1)
-   */
+  const scope = getAccommodationScope(currentUser);
+  whereParts.push(scope.condition);
+  params.push(...scope.inputs);
+
   const whereSql =
     whereParts.length > 0 ? `WHERE ${whereParts.join("\nAND ")}` : "";
-
-  /*
-   * Query này lấy dữ liệu của trang hiện tại.
-   *
-   * Nó lấy:
-   * - Thông tin chính từ accommodations
-   * - Tên loại hình từ accommodation_types
-   * - Tên điểm đến từ locations
-   * - Tên tỉnh từ provinces
-   * - Tên phường từ wards
-   * - Ảnh cover từ accommodation_images
-   * - Số loại phòng
-   * - Số tiện nghi
-   */
 
   const selectSql = `
         SELECT 
@@ -2049,16 +2052,6 @@ async function getAccommodationList(query = {}, currentUser = {}) {
         FETCH NEXT @limit ROWS ONLY;
     `;
 
-  /*
-   * Query này không lấy dữ liệu chi tiết.
-   * Nó chỉ đếm tổng số accommodation phù hợp với filter.
-   *
-   * Vì sao cần query riêng?
-   *
-   * Nếu chỉ dùng items.length thì khi đang ở page 2,
-   * ta chỉ biết page đó có bao nhiêu dòng,
-   * không biết toàn bộ database có bao nhiêu dòng.
-   */
   const countSql = `
         SELECT COUNT(*) AS total
         FROM dbo.accommodations a
@@ -2066,83 +2059,31 @@ async function getAccommodationList(query = {}, currentUser = {}) {
         ${whereSql};
     `;
 
-  /*
-   * Tạo request dùng cho query SELECT.
-   *
-   * params chứa các parameter đã được tạo từ filter:
-   * - q
-   * - locationId
-   * - provinceId
-   * - isFeatured
-   * - typeId0, typeId1...
-   * - status0, status1...
-   */
+
   const dataRequest = pool.request();
 
-  /*
-   * Gắn từng parameter vào request.
-   *
-   * Ví dụ:
-   * .input("locationId", sql.Int, 1)
-   *
-   * Giá trị không được nối trực tiếp vào SQL.
-   * Đây là cách chống SQL injection.
-   */
   for (const param of params) {
     dataRequest.input(param.name, param.type, param.value);
   }
 
-  /*
-   * offset và limit cũng là parameter SQL.
-   */
+
   dataRequest.input("offset", sql.Int, offset).input("limit", sql.Int, limit);
 
-  /*
-   * Query count cũng cần nhận cùng các filter.
-   *
-   * Ta phải tạo request riêng vì mỗi request
-   * có danh sách parameter riêng.
-   */
   const countRequest = pool.request();
 
   for (const param of params) {
     countRequest.input(param.name, param.type, param.value);
   }
 
-  /*
-   * Hai query không phụ thuộc kết quả của nhau,
-   * nên chạy song song bằng Promise.all().
-   *
-   * - dataResult: dữ liệu của trang hiện tại
-   * - countResult: tổng số dòng phù hợp
-   */
   const [dataResult, countResult] = await Promise.all([
     dataRequest.query(selectSql),
     countRequest.query(countSql),
   ]);
 
-  /*
-   * dataResult.recordset là mảng các dòng SQL.
-   *
-   * mapSummaryRow() sẽ chuyển từng dòng:
-   * accommodation_name → name
-   * is_featured → isFeatured
-   * type_code + type_name → type
-   */
   const items = dataResult.recordset.map(mapSummaryRow);
 
-  /*
-   * COUNT(*) có thể trả về kiểu số khác nhau
-   * tùy driver, nên ép rõ về Number.
-   */
   const total = Number(countResult.recordset[0]?.total || 0);
 
-  /*
-   * Service chỉ trả dữ liệu.
-   * Service không gọi res.json().
-   *
-   * Controller mới chịu trách nhiệm trả HTTP response.
-   */
   return {
     items,
 
@@ -2179,9 +2120,9 @@ function mapDetailRow(row) {
 
     ward: row.ward_id
       ? {
-          id: row.ward_id,
-          name: row.ward_name,
-        }
+        id: row.ward_id,
+        name: row.ward_name,
+      }
       : null,
 
     addressLine: row.address_line,
@@ -2367,9 +2308,16 @@ async function getAccommodationDetail(id, currentUser = {}) {
   }
 
   const pool = getDBPool();
-  const result = await pool
+  const scope = getAccommodationScope(currentUser);
+  const detailRequest = pool
     .request()
-    .input("accommodationId", sql.Int, accommodationId).query(`
+    .input("accommodationId", sql.Int, accommodationId);
+
+  for (const input of scope.inputs) {
+    detailRequest.input(input.name, input.type, input.value);
+  }
+
+  const result = await detailRequest.query(`
         SELECT
                 -- Thông tin chính của accommodation.
                 a.id,
@@ -2452,7 +2400,8 @@ async function getAccommodationDetail(id, currentUser = {}) {
                * Không cho xem dữ liệu đã bị xóa mềm.
                * Đây là quy tắc chung của module accommodation.
                */
-              AND a.deleted_at IS NULL;
+              AND a.deleted_at IS NULL
+              AND ${scope.condition};
         `);
   /*
    * Nếu recordset rỗng nghĩa là không có accommodation

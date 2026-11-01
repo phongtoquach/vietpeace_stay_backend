@@ -6,10 +6,16 @@ const { getDBPool } = require("../configs/database");
 const EMAIL_REGEX =
     /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
+const ADMIN_PANEL_ROLES = Object.freeze(["ADMIN", "ACCOMMODATION_MANAGER"]);
+
 const LOGIN_ROLES = {
     web: ["CUSTOMER"],
-    admin: ["ADMIN", "ACCOMMODATION_MANAGER"]
+    admin: ADMIN_PANEL_ROLES
 };
+
+function isAdminPanelRole(role) {
+    return ADMIN_PANEL_ROLES.includes(role);
+}
 
 function failure(errorCode, errorMsg = "", errors = {}) {
     return {
@@ -77,7 +83,7 @@ function generatePublicUserInfo(user) {
  * audience: "web" hoặc "admin", do controller truyền vào.
  */
 async function login(body, audience = "web") {
-    console.log("[auth_service - login()] Đang chạy hàm login() ! audience : " + audience + " ; body data : ", body);
+    console.log("[auth_service - login()] audience : " + audience);
     
     if (!isValidBody(body)) {
         return failure("REQUEST_BODY_INVALID","Request body không hợp lệ.");
@@ -92,7 +98,7 @@ async function login(body, audience = "web") {
 
     const { email, password, errors } = validateCredentials(body);
     console.log("[auth_service - login()] Kết quả hàm validateCredentials() : ");
-    console.log("[auth_service - login()] email : " + email + " ; password : " + password);
+    console.log("[auth_service - login()] email : " + email);
     console.log("[auth_service - login()] errors : ", errors);
 
     if (Object.keys(errors).length > 0) {
@@ -131,7 +137,7 @@ async function login(body, audience = "web") {
     }
 
     const user = result.recordset[0];
-    console.log("[auth_service - login()] Data của user vừa lấy ra : ", user);
+    console.log("[auth_service - login()] User lookup completed for email : " + email);
 
     const passwordMatches = await bcrypt.compare(password, user.password_hash);
 
@@ -189,6 +195,21 @@ async function login(body, audience = "web") {
         success: true,
         user: generatePublicUserInfo(user)
     };
+}
+
+async function getAdminUserById(userId) {
+    const pool = getDBPool();
+
+    const result = await pool
+        .request()
+        .input("id", sql.UniqueIdentifier, userId)
+        .query(`
+            SELECT id, email, full_name, display_name, role, status
+            FROM dbo.users
+            WHERE id = @id;
+        `);
+
+    return result.recordset[0] ?? null;
 }
 
 /**
@@ -389,4 +410,6 @@ module.exports = {
     login,
     register,
     logout,
+    getAdminUserById,
+    isAdminPanelRole,
 };

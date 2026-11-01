@@ -30,7 +30,7 @@ async function login(req, res) {
     });
 
     // chuẩn bị login user data
-    const loginUserData =  {
+    const loginUserData = {
         id: loginResult.user.id,
         email: loginResult.user.email,
         fullName: loginResult.user.full_name,

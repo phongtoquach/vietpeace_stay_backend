@@ -4,7 +4,10 @@ const { ok, fail } = require("../../../utils/response");
 // Controller chỉ nhận HTTP → gọi service → trả JSON.
 async function getRoomTypesList(req, res) {
   try {
-    const result = await roomTypeService.getRoomTypeList(req.query);
+    const result = await roomTypeService.getRoomTypeList(
+      req.query,
+      req.currentAdmin,
+    );
     return ok(res, result, "Lấy danh sách loại phòng thành công.");
   } catch (error) {
     console.error("[getRoomTypesList] Lỗi:", error);
@@ -30,7 +33,10 @@ async function getRoomTypesList(req, res) {
 
 async function getRoomTypeDetail(req, res) {
   try {
-    const result = await roomTypeService.getRoomTypeDetail(req.params.id);
+    const result = await roomTypeService.getRoomTypeDetail(
+      req.params.id,
+      req.currentAdmin,
+    );
     return ok(res, result, "Lấy chi tiết loại phòng thành công.");
   } catch (error) {
     console.error("[getRoomTypeDetail] Lỗi:", error);
@@ -56,7 +62,10 @@ async function getRoomTypeDetail(req, res) {
 
 async function createRoomType(req, res) {
   try {
-    const result = await roomTypeService.createRoomType(req.body);
+    const result = await roomTypeService.createRoomType(
+      req.body,
+      req.currentAdmin,
+    );
     return ok(res, result, "Tạo loại phòng thành công.", 201);
   } catch (error) {
     console.error("[createRoomType] Lỗi:", error);
@@ -82,7 +91,11 @@ async function createRoomType(req, res) {
 
 async function updateRoomType(req, res) {
   try {
-    const result = await roomTypeService.updateRoomType(req.params.id, req.body);
+    const result = await roomTypeService.updateRoomType(
+      req.params.id,
+      req.body,
+      req.currentAdmin,
+    );
     return ok(res, result, "Cập nhật loại phòng thành công.");
   } catch (error) {
     console.error("[updateRoomType] Lỗi:", error);

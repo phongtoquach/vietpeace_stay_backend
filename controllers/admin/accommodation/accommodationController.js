@@ -24,7 +24,7 @@ async function getAccommodationsList(req, res) {
      */
     const result = await accommodationService.getAccommodationList(
       req.query,
-      req.session.admin,
+      req.currentAdmin,
     );
     /*
      * result đã có:
@@ -57,7 +57,7 @@ async function getAccommodationDetail(req, res) {
   try {
     const result = await accommodationService.getAccommodationDetail(
       req.params.id,
-      req.session.admin,
+      req.currentAdmin,
     );
     return ok(res, result, "Lấy chi tiết cơ sở lưu trú thành công.");
   } catch (error) {
@@ -122,7 +122,7 @@ async function updateAccommodation(req, res) {
     const result = await accommodationService.updateAccommodation(
       req.params.id,
       req.body,
-      req.session.admin,
+      req.currentAdmin,
     );
     return ok(res, result, "Cập nhật cơ sở lưu trú thành công.");
   } catch (error) {
@@ -139,7 +139,7 @@ async function updateAccommodationStatus(req, res) {
     const result = await accommodationService.updateAccommodationStatus(
       req.params.id,
       req.body.status,
-      req.session.admin,
+      req.currentAdmin,
     );
     return ok(res, result, "Cập nhật trạng thái cơ sở lưu trú thành công.");
   } catch (error) {
@@ -161,7 +161,7 @@ async function updateAccommodationFeatured(req, res) {
     const result = await accommodationService.updateAccommodationFeatured(
       req.params.id,
       req.body.isFeatured,
-      req.session.admin,
+      req.currentAdmin,
     );
     return ok(res, result, "Cập nhật trạng thái nổi bật thành công.");
   } catch (error) {
