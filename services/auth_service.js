@@ -174,7 +174,12 @@ async function login(body, audience = "web") {
     }
 
     const allowedRoles = LOGIN_ROLES[audience];
-    console.log("[auth_service - login()] allowedRoles - các role được cho phép login vào admin panel : ", allowedRoles)
+    if (audience === "admin"){
+        console.log("[auth_service - login()] allowedRoles - các role được cho phép login vào Admin Panel : ", allowedRoles);
+    }
+    else {
+        console.log("[auth_service - login()] allowedRoles - các role được cho phép login vào Website đặt phòng : ", allowedRoles);
+    }
 
     if (!allowedRoles.includes(user.role)) {
         return failure("LOGIN_FORBIDDEN", "Tài khoản này không có quyền đăng nhập vào " + ((audience === "admin") ? "Hệ thống quản trị !" : "Website đặt phòng !"));
