@@ -64,11 +64,13 @@ async function login(req, res) {
 
 
 async function getLoggedInAdminUser(req, res) {
+    // Ưu tiên req.currentAdmin: identity vừa được load từ DB trong middleware,
+    // phản ánh role/status mới nhất; req.session.admin chỉ là bản copy trong session.
     return res.json({
         success: true,
         message: "Get logged-in admin user successfully",
         data: {
-            userInfo: req.session.admin
+            userInfo: req.currentAdmin ?? req.session.admin
         }
     });
 }

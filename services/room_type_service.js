@@ -1182,7 +1182,7 @@ async function updateRoomType(id, body = {}, currentUser = {}) {
   }
 }
 
-async function deleteRoomType(id) {
+async function deleteRoomType(id, currentUser = {}) {
   const roomTypeId = parsePositiveInt(id);
   if (!roomTypeId) {
     throw validationError({
@@ -1190,16 +1190,34 @@ async function deleteRoomType(id) {
     });
   }
 
-  const result = await getDBPool()
+  // Scope theo role: ADMIN bypass ownership, manager chỉ xóa được room type
+  // thuộc accommodation có bản ghi assignment trong dbo.accommodation_managers.
+  // Điều kiện scope nằm ngay trong UPDATE để tránh check-then-act.
+  const scope = getAccommodationScope(currentUser, "a");
+
+  const request = getDBPool()
     .request()
-    .input("id", sql.Int, roomTypeId)
-    .query(`
-      UPDATE dbo.room_types
-      SET deleted_at = SYSDATETIME(),
-          updated_at = SYSDATETIME()
-      WHERE id = @id AND deleted_at IS NULL;
+    .input("id", sql.Int, roomTypeId);
+
+  for (const input of scope.inputs) {
+    request.input(input.name, input.type, input.value);
+  }
+
+  const result = await request.query(`
+      UPDATE rt
+      SET rt.deleted_at = SYSDATETIME(),
+          rt.updated_at = SYSDATETIME()
+      FROM dbo.room_types rt
+      JOIN dbo.accommodations a
+        ON a.id = rt.accommodation_id
+      WHERE rt.id = @id
+        AND rt.deleted_at IS NULL
+        AND a.deleted_at IS NULL
+        AND ${scope.condition};
     `);
 
+  // 0 rows: không tồn tại HOẶC đã xóa HOẶC ngoài scope → cùng một 404,
+  // không tạo existence oracle qua status/message.
   if (result.rowsAffected[0] === 0) {
     throw new RoomTypeServiceError(
       404,

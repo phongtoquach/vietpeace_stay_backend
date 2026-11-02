@@ -121,7 +121,10 @@ async function updateRoomType(req, res) {
 
 async function deleteRoomType(req, res) {
   try {
-    const result = await roomTypeService.deleteRoomType(req.params.id);
+    const result = await roomTypeService.deleteRoomType(
+      req.params.id,
+      req.currentAdmin,
+    );
     return ok(res, result, "Đã xóa loại phòng.");
   } catch (error) {
     console.error("[deleteRoomType] Lỗi:", error);
