@@ -2,8 +2,6 @@
  * Session dành cho customer login trên Web
  */
 
-console.log("[customerSession] secret : " + process.env.CUSTOMER_SESSION_SECRET);
-
 const session = require("express-session");
 
 const customerSession = session({
