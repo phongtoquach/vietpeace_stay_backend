@@ -1035,6 +1035,23 @@ async function updateRoomType(id, body = {}, currentUser = {}) {
     const current = await getRoomTypeDetail(roomTypeId, currentUser);
     const values = validateRoomTypePayload(body, { isCreate: false });
 
+    // Policy P2: manager chỉ quản lý room type trong cơ sở được gán, không
+    // được chuyển room type sang cơ sở khác. ADMIN được reassign toàn hệ thống.
+    // Chặn ngay sau khi đọc current (đã qua scope → 404 nếu ngoài scope) và
+    // trước các bước DB, không tạo existence oracle vì room type thuộc scope.
+    if (
+      currentUser.role !== "ADMIN" &&
+      values.accommodationId !== undefined &&
+      values.accommodationId !== current.accommodationId
+    ) {
+      throw new RoomTypeServiceError(
+        403,
+        ERROR_CODES.FORBIDDEN,
+        "Bạn không có quyền chuyển loại phòng sang cơ sở lưu trú khác.",
+        { accommodationId: "Không thể đổi cơ sở lưu trú của loại phòng." },
+      );
+    }
+
     const pick = (field, fallback) =>
       values[field] !== undefined ? values[field] : fallback;
 
