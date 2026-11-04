@@ -324,11 +324,9 @@ async function loadOpenBookingSelection(pool, customerId, accommodationId, stay)
                   AND accommodation_id = @accommodationId
                   AND check_in_date = CONVERT(date, @checkin, 23)
                   AND check_out_date = CONVERT(date, @checkout, 23)
-                  AND status IN ('PENDING', 'PAYMENT_PROCESSING')
+                  AND status = 'PENDING'
                   AND pending_expires_at > SYSDATETIME()
-                ORDER BY
-                    CASE WHEN status = 'PAYMENT_PROCESSING' THEN 0 ELSE 1 END,
-                    id DESC
+                ORDER BY id DESC
             ) AS b
             JOIN dbo.booking_items AS bi ON bi.booking_id = b.id
             ORDER BY bi.id;
