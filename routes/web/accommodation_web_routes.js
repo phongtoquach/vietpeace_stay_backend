@@ -7,11 +7,12 @@ const express = require("express");
 const router = express.Router();
 
 const accommodationController = require("../../controllers/web/accommodation/accommodationController");
+const accommodationDetailController = require("../../controllers/web/accommodation/accommodationDetailController");
 
 
 router.post("/search", accommodationController.searchAccommodations);
 
-router.get("/detail/:id/:slug", accommodationController.getAccommodationDetail);
+router.get("/detail/:accommodationId", accommodationDetailController.getAccommodationDetailByAccommodationId);
 
 
 // export

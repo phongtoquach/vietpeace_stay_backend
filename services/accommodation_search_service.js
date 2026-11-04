@@ -994,8 +994,8 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 			imagesByAccommodation[accommodationId].push(imageObj);
 		}
 
-		console.log("Data của amenityRows : ");
-		console.log(amenityRows);
+		//console.log("Data của amenityRows : ");
+		//console.log(amenityRows);
 
 		for (const row of amenityRows) {
 			// accommodation_id dùng để gom nhóm.

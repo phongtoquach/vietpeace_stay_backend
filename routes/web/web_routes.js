@@ -42,6 +42,14 @@ router.use("/accommodations", accommodationRoutes);
 
 
 /**
+ * Bookings
+ * /api/web/booking/*
+ */
+const bookingWebRoutes = require("./booking_web_routes");
+router.use("/booking", bookingWebRoutes);
+
+
+/**
  * [PUBLIC APIS] Các API để lookup
  * 
 */
