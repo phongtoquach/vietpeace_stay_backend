@@ -10,31 +10,37 @@ async function getBookingPreview(req, res) {
         if (!body || typeof body !== "object" || Array.isArray(body)) {
             return res.status(200).json({
                 success: false,
-                errorCode: "DATA_INVALID",
-                errorMsg: "Body phải là một JSON object.",
+                message: "Body phải là một JSON object.",
+                errorCode: "DATA_INVALID"
             });
         }
 
-        const data = await bookingWebService.getBookingPreview(
+        const resultData = await bookingWebService.getBookingPreview(
             body,
             req.session?.customer?.id
         );
 
-        if (!data) {
+        //console.log("[getBookingPreview] Data của resultData : ", resultData);
+
+        if (!resultData) {
             return res.status(200).json({
                 success: false,
-                errorCode: "ACCOMMODATION_NOT_FOUND",
-                errorMsg: "Không tìm thấy cơ sở lưu trú.",
+                message: "Không tìm thấy cơ sở lưu trú.",
+                errorCode: "ACCOMMODATION_NOT_FOUND"
             });
         }
 
-        return res.json({ success: true, data });
+        return res.json({
+            success: true,
+            message: "Successful",
+            data: resultData
+        });
     } catch (error) {
         if (error.statusCode === 400) {
             return res.status(200).json({
                 success: false,
-                errorCode: "DATA_INVALID",
-                errorMsg: error.message,
+                message: error.message,
+                errorCode: "DATA_INVALID"
             });
         }
 
@@ -42,31 +48,33 @@ async function getBookingPreview(req, res) {
 
         return res.status(200).json({
             success: false,
-            errorCode: "INTERNAL_SERVER_ERROR",
-            errorMsg: "Không thể tải thông tin cơ sở lưu trú lúc này.",
+            message: "Không thể tải thông tin cơ sở lưu trú lúc này.",
+            errorCode: "INTERNAL_SERVER_ERROR"
         });
     }
 }
 
 
 async function savePendingBooking(req, res) {
+    console.log("[savePendingBooking] Data cua req.session.customer : ", req.session.customer);
     try {
-        const data = await bookingWebService.savePendingBooking(
+        const result_data = await bookingWebService.savePendingBooking(
             req.body,
             req.session?.customer?.id
         );
 
-        return res.status(data.created ? 201 : 200).json({
+        return res.status(result_data.created ? 201 : 200).json({
             success: true,
-            data,
+            message: "Successful",
+            data: result_data
         });
     } catch (error) {
         if ([400, 401, 404, 409].includes(error.statusCode)) {
             return res.status(error.statusCode).json({
                 success: false,
+                message: error.message,
                 errorCode: error.errorCode ?? "DATA_INVALID",
-                errorMsg: error.message,
-                errorsDetail: error.errorsDetail ?? {},
+                errors: error.errorsDetail ?? {}
             });
         }
 
@@ -74,9 +82,9 @@ async function savePendingBooking(req, res) {
 
         return res.status(500).json({
             success: false,
+            message: "Không thể lưu đặt phòng lúc này.",
             errorCode: "INTERNAL_SERVER_ERROR",
-            errorMsg: "Không thể lưu đặt phòng lúc này.",
-            errorsDetail: {},
+            errors: {}
         });
     }
 }
