@@ -8,8 +8,12 @@ const router = express.Router();
 
 const bookingController = require("../../controllers/web/booking/bookingController");
 
+const requireCustomerLogin = require("../../middlewares/requireCustomerLogin");
+
 
 router.post("/booking-preview", bookingController.getBookingPreview);
+
+router.post("/save-pending-booking", requireCustomerLogin, bookingController.savePendingBooking);
 
 
 // export

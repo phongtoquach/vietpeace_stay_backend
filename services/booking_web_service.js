@@ -3,6 +3,8 @@
 
 const { sqlObj, getDBPool } = require("../configs/database");
 
+const { randomInt, randomUUID } = require("node:crypto");
+
 const DAY_MS = 86_400_000;
 const MAX_STAY_NIGHTS = 90;
 const MAX_SQL_INT = 2_147_483_647;
@@ -608,6 +610,417 @@ async function getBookingPreview(body, customerId) {
 }
 
 
+function draftError(statusCode, errorCode, message, errorsDetail = {}) {
+    return Object.assign(new Error(message), {
+        statusCode,
+        errorCode,
+        errorsDetail,
+    });
+}
+
+function createBookingCodeTimestamp(date) {
+    const formatter = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Ho_Chi_Minh",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+    });
+
+    const parts = Object.fromEntries(
+        formatter.formatToParts(date).map(({ type, value }) => [type, value])
+    );
+
+    return `${parts.year}${parts.month}${parts.day}${parts.hour}${parts.minute}${parts.second}`;
+}
+
+function createBookingCodeSuffix() {
+    const alphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ";
+    let suffix = "";
+
+    for (let index = 0; index < 12; index += 1) {
+        suffix += alphabet[randomInt(alphabet.length)];
+    }
+
+    return suffix;
+}
+
+async function lockDraftCustomer(transaction, customerId) {
+    const result = await new sqlObj.Request(transaction)
+        .input("customerId", sqlObj.UniqueIdentifier, customerId)
+        .query(`
+            SELECT email
+            FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
+            WHERE id = @customerId
+              AND status = 1
+              AND role = 'CUSTOMER';
+        `);
+
+    return result.recordset[0] ?? null;
+}
+
+async function persistPendingBooking(transaction, customerId, email, draft) {
+    const { accommodationId, stay, quote } = draft;
+
+    const totalAdults = quote.selectedRooms.reduce(
+        (total, room) => total + room.adults,
+        0
+    );
+
+    const totalChildren = quote.selectedRooms.reduce(
+        (total, room) => total + room.children,
+        0
+    );
+
+    const codeTimestamp = createBookingCodeTimestamp(new Date());
+    const temporaryBookingCode = `TMP-${codeTimestamp}-${randomUUID()}`;
+    const bookingCodeSuffix = createBookingCodeSuffix();
+
+    const result = await new sqlObj.Request(transaction)
+        .input("customerId", sqlObj.UniqueIdentifier, customerId)
+        .input("temporaryBookingCode", sqlObj.VarChar(55), temporaryBookingCode)
+        .input("codeTimestamp", sqlObj.VarChar(14), codeTimestamp)
+        .input("bookingCodeSuffix", sqlObj.VarChar(12), bookingCodeSuffix)
+        .input("contactEmail", sqlObj.VarChar(255), email)
+        .input("accommodationId", sqlObj.Int, accommodationId)
+        .input("checkin", sqlObj.VarChar(10), stay.checkinDate)
+        .input("checkout", sqlObj.VarChar(10), stay.checkoutDate)
+        .input("totalNights", sqlObj.Int, stay.totalNights)
+        .input("totalRooms", sqlObj.Int, quote.selectedRooms.length)
+        .input("totalAdults", sqlObj.Int, totalAdults)
+        .input("totalChildren", sqlObj.Int, totalChildren)
+        .input("roomsSubtotal", sqlObj.Decimal(18, 2), quote.roomsSubtotal)
+        .input("extraGuestTotal", sqlObj.Decimal(18, 2), quote.extraGuestTotal)
+        .input("roomDiscountTotal", sqlObj.Decimal(18, 2), quote.roomDiscountTotal)
+        .input("discountAmount", sqlObj.Decimal(18, 2), quote.discountAmount)
+        .input("taxAmount", sqlObj.Decimal(18, 2), quote.taxAmount)
+        .input("totalAmount", sqlObj.Decimal(18, 2), quote.totalAmount)
+        .query(`
+            DECLARE @now datetime2 = SYSDATETIME();
+            DECLARE @bookingId bigint;
+            DECLARE @created bit = 0;
+
+            UPDATE dbo.bookings
+            SET status = 'EXPIRED', updated_at = @now
+            WHERE user_id = @customerId
+              AND status = 'PENDING'
+              AND (pending_expires_at IS NULL OR pending_expires_at <= @now);
+
+            SELECT TOP (1) @bookingId = id
+            FROM dbo.bookings WITH (UPDLOCK, HOLDLOCK)
+            WHERE user_id = @customerId
+              AND status = 'PENDING'
+              AND pending_expires_at > @now
+            ORDER BY id DESC;
+
+            IF @bookingId IS NULL
+            BEGIN
+                DECLARE @inserted TABLE (id bigint NOT NULL);
+
+                INSERT INTO dbo.bookings (
+                    booking_code,
+                    user_id,
+                    accommodation_id,
+                    check_in_date,
+                    check_out_date,
+                    total_nights,
+                    contact_name,
+                    contact_email,
+                    contact_phone,
+                    total_rooms,
+                    total_adults,
+                    total_children,
+                    rooms_subtotal,
+                    extra_guest_total,
+                    room_discount_total,
+                    discount_amount,
+                    tax_amount,
+                    service_fee,
+                    total_amount,
+                    currency,
+                    status,
+                    pending_expires_at
+                )
+                OUTPUT inserted.id INTO @inserted(id)
+                VALUES (
+                    @temporaryBookingCode,
+                    @customerId,
+                    @accommodationId,
+                    CONVERT(date, @checkin, 23),
+                    CONVERT(date, @checkout, 23),
+                    @totalNights,
+                    N'',
+                    @contactEmail,
+                    '',
+                    @totalRooms,
+                    @totalAdults,
+                    @totalChildren,
+                    @roomsSubtotal,
+                    @extraGuestTotal,
+                    @roomDiscountTotal,
+                    @discountAmount,
+                    @taxAmount,
+                    0,
+                    @totalAmount,
+                    'VND',
+                    'PENDING',
+                    DATEADD(minute, 30, @now)
+                );
+
+                SELECT @bookingId = id FROM @inserted;
+
+                UPDATE dbo.bookings
+                SET booking_code = CONCAT(
+                    'VP-',
+                    CONVERT(varchar(20), @bookingId),
+                    '-',
+                    @codeTimestamp,
+                    '-',
+                    @bookingCodeSuffix
+                )
+                WHERE id = @bookingId;
+
+                SET @created = 1;
+            END
+            ELSE
+            BEGIN
+                DELETE nr
+                FROM dbo.booking_item_nightly_rates AS nr
+                JOIN dbo.booking_items AS bi
+                    ON bi.id = nr.booking_item_id
+                WHERE bi.booking_id = @bookingId;
+
+                DELETE FROM dbo.booking_items
+                WHERE booking_id = @bookingId;
+
+                UPDATE dbo.bookings
+                SET
+                    accommodation_id = @accommodationId,
+                    check_in_date = CONVERT(date, @checkin, 23),
+                    check_out_date = CONVERT(date, @checkout, 23),
+                    total_nights = @totalNights,
+                    total_rooms = @totalRooms,
+                    total_adults = @totalAdults,
+                    total_children = @totalChildren,
+                    rooms_subtotal = @roomsSubtotal,
+                    extra_guest_total = @extraGuestTotal,
+                    room_discount_total = @roomDiscountTotal,
+                    discount_amount = @discountAmount,
+                    tax_amount = @taxAmount,
+                    service_fee = 0,
+                    total_amount = @totalAmount,
+                    updated_at = @now
+                WHERE id = @bookingId;
+            END;
+
+            SELECT
+                CONVERT(varchar(20), id) AS bookingId,
+                booking_code AS bookingCode,
+                status AS bookingStatus,
+                DATEDIFF(second, @now, pending_expires_at) AS expiresInSeconds,
+                @created AS created
+            FROM dbo.bookings
+            WHERE id = @bookingId;
+        `);
+
+    return result.recordset[0];
+}
+
+async function insertPendingBookingItem(transaction, bookingId, room, roomType) {
+    await new sqlObj.Request(transaction)
+        .input("bookingId", sqlObj.BigInt, bookingId)
+        .input("roomTypeId", sqlObj.Int, room.roomTypeId)
+        .input("roomTypeName", sqlObj.NVarChar(255), roomType.name)
+        .input("adults", sqlObj.Int, room.adults)
+        .input("children", sqlObj.Int, room.children)
+        .input("includedAdults", sqlObj.Int, room.includedAdults)
+        .input("includedChildren", sqlObj.Int, room.includedChildren)
+        .input("basePrice", sqlObj.Decimal(18, 2), roomType.basePrice)
+        .input("roomSubtotal", sqlObj.Decimal(18, 2), room.roomSubtotal)
+        .input("extraAdultFee", sqlObj.Decimal(18, 2), room.extraAdultFeePerNight)
+        .input("extraChildFee", sqlObj.Decimal(18, 2), room.extraChildFeePerNight)
+        .input("extraAdultTotal", sqlObj.Decimal(18, 2), room.extraAdultTotal)
+        .input("extraChildTotal", sqlObj.Decimal(18, 2), room.extraChildTotal)
+        .input("discountAmount", sqlObj.Decimal(18, 2), room.discountAmount)
+        .input("totalAmount", sqlObj.Decimal(18, 2), room.totalAmount)
+        .input(
+            "nightlyRates",
+            sqlObj.NVarChar(sqlObj.MAX),
+            JSON.stringify(room.nightlyRates)
+        )
+        .query(`
+            DECLARE @inserted TABLE (id bigint NOT NULL);
+
+            INSERT INTO dbo.booking_items (
+                booking_id,
+                room_type_id,
+                room_type_name,
+                adults,
+                children,
+                included_adults,
+                included_children,
+                base_price,
+                room_subtotal,
+                extra_adult_fee,
+                extra_child_fee,
+                extra_adult_total,
+                extra_child_total,
+                discount_amount,
+                total_amount
+            )
+            OUTPUT inserted.id INTO @inserted(id)
+            VALUES (
+                @bookingId,
+                @roomTypeId,
+                @roomTypeName,
+                @adults,
+                @children,
+                @includedAdults,
+                @includedChildren,
+                @basePrice,
+                @roomSubtotal,
+                @extraAdultFee,
+                @extraChildFee,
+                @extraAdultTotal,
+                @extraChildTotal,
+                @discountAmount,
+                @totalAmount
+            );
+
+            INSERT INTO dbo.booking_item_nightly_rates (
+                booking_item_id,
+                stay_date,
+                nightly_price
+            )
+            SELECT
+                item.id,
+                rate.stayDate,
+                rate.price
+            FROM @inserted AS item
+            CROSS JOIN OPENJSON(@nightlyRates)
+            WITH (
+                stayDate date '$.stayDate',
+                price decimal(18, 2) '$.price'
+            ) AS rate;
+        `);
+}
+
+async function savePendingBooking(draftBooking, customerId) {
+    if (!customerId) {
+        throw draftError(401, "UNAUTHENTICATED", "Vui lòng đăng nhập để đặt phòng.");
+    }
+
+    if (
+        !draftBooking ||
+        typeof draftBooking !== "object" ||
+        Array.isArray(draftBooking)
+    ) {
+        throw badRequest("Body phải là một JSON object.");
+    }
+
+    const accommodationId = readAccommodationId(draftBooking.accommodationId);
+    const stay = readStay(draftBooking);
+    const { selectedRooms } = draftBooking;
+
+    if (!Array.isArray(selectedRooms) || selectedRooms.length === 0) {
+        throw badRequest("Vui lòng chọn ít nhất một phòng.");
+    }
+
+    const pool = await getDBPool();
+
+    // loadRoomData() tiếp tục dùng pool.request() trước transaction.
+    const recordsets = await loadRoomData(pool, accommodationId, stay);
+
+    if (!recordsets) {
+        throw draftError(
+            404,
+            "ACCOMMODATION_NOT_FOUND",
+            "Không tìm thấy cơ sở lưu trú."
+        );
+    }
+
+    const allRoomTypes = buildRoomTypes(recordsets, stay);
+    const roomById = new Map(allRoomTypes.map(room => [room.id, room]));
+
+    const { validRooms, selectionIssues, removedRoomTypes } =
+        reconcileSelectedRooms(selectedRooms, roomById);
+
+    if (validRooms.length !== selectedRooms.length) {
+        throw draftError(
+            409,
+            "BOOKING_SELECTION_CHANGED",
+            "Một số phòng đã chọn không còn hợp lệ. Vui lòng kiểm tra lại.",
+            {
+                availability: buildAvailability(allRoomTypes, selectedRooms.length),
+                selectionIssues,
+                removedRoomTypes,
+            }
+        );
+    }
+
+    const quote = calculateQuote(
+        accommodationId,
+        validRooms,
+        roomById,
+        stay.totalNights
+    );
+
+    const transaction = new sqlObj.Transaction(pool);
+    await transaction.begin(sqlObj.ISOLATION_LEVEL.READ_COMMITTED);
+
+    try {
+        const customer = await lockDraftCustomer(transaction, customerId);
+
+        if (!customer) {
+            throw draftError(
+                401,
+                "UNAUTHENTICATED",
+                "Tài khoản không còn phiên đăng nhập hợp lệ."
+            );
+        }
+
+        const saved = await persistPendingBooking(
+            transaction,
+            customerId,
+            customer.email,
+            { accommodationId, stay, quote }
+        );
+
+        for (const room of quote.selectedRooms) {
+            await insertPendingBookingItem(
+                transaction,
+                saved.bookingId,
+                room,
+                roomById.get(room.roomTypeId)
+            );
+        }
+
+        await transaction.commit();
+
+        return {
+            ...saved,
+            accommodationId,
+            checkinDate: stay.checkinDate,
+            checkoutDate: stay.checkoutDate,
+            totalNights: stay.totalNights,
+            ...quote,
+        };
+    } catch (error) {
+        try {
+            await transaction.rollback();
+        } catch (rollbackError) {
+            console.error("[booking-draft.rollback]", rollbackError);
+        }
+
+        throw error;
+    }
+}
+
+
 module.exports = {
-    getBookingPreview
+    getBookingPreview,
+    savePendingBooking
 };

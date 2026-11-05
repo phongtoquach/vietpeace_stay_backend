@@ -49,7 +49,49 @@ async function getBookingPreview(req, res) {
 }
 
 
+async function savePendingBooking(req, res) {
+     return res.json({
+        success: true,
+        message: "uccessfully",
+        data: {
+            customerInfo: req.session.customer
+        }
+    });
+
+    try {
+        const data = await bookingWebService.savePendingBooking(
+            req.body,
+            req.session?.customer?.id
+        );
+
+        return res.status(data.created ? 201 : 200).json({
+            success: true,
+            data,
+        });
+    } catch (error) {
+        if ([400, 401, 404, 409].includes(error.statusCode)) {
+            return res.status(error.statusCode).json({
+                success: false,
+                errorCode: error.errorCode ?? "DATA_INVALID",
+                errorMsg: error.message,
+                errorsDetail: error.errorsDetail ?? {},
+            });
+        }
+
+        console.error("[booking-draft.save]", error);
+
+        return res.status(500).json({
+            success: false,
+            errorCode: "INTERNAL_SERVER_ERROR",
+            errorMsg: "Không thể lưu đặt phòng lúc này.",
+            errorsDetail: {},
+        });
+    }
+}
+
+
 // export
 module.exports = {
-    getBookingPreview
+    getBookingPreview,
+    savePendingBooking
 };
