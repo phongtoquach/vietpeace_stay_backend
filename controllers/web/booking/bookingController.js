@@ -50,14 +50,6 @@ async function getBookingPreview(req, res) {
 
 
 async function savePendingBooking(req, res) {
-     return res.json({
-        success: true,
-        message: "uccessfully",
-        data: {
-            customerInfo: req.session.customer
-        }
-    });
-
     try {
         const data = await bookingWebService.savePendingBooking(
             req.body,
