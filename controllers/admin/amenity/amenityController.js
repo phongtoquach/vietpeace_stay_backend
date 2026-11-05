@@ -17,6 +17,7 @@ async function getAmenitiesList(req, res) {
                 a.icon_key,
                 a.description,
                 a.is_active,
+                a.is_featured,
                 a.sort_order,
                 COUNT(DISTINCT aa.accommodation_id) AS usage_count
             FROM dbo.amenities a
@@ -34,6 +35,7 @@ async function getAmenitiesList(req, res) {
                 a.icon_key,
                 a.description,
                 a.is_active,
+                a.is_featured,
                 a.sort_order
             ORDER BY a.sort_order, a.id;
         `);
@@ -363,10 +365,67 @@ async function toggleAmenityStatus(req, res) {
     }
 }
 
+// Đánh dấu / bỏ đánh dấu tiện nghi nổi bật
+async function toggleAmenityFeatured(req, res) {
+    try {
+        const amenityId = Number(req.params.id);
+
+        if (!Number.isInteger(amenityId) || amenityId <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: "ID tiện nghi không hợp lệ."
+            });
+        }
+
+        const { is_featured } = req.body;
+
+        if (typeof is_featured !== "boolean") {
+            return res.status(400).json({
+                success: false,
+                message: "Trạng thái nổi bật không hợp lệ."
+            });
+        }
+
+        const pool = getDBPool();
+
+        const result = await pool.request()
+            .input("id", sqlObj.Int, amenityId)
+            .input("is_featured", sqlObj.Bit, is_featured)
+            .query(`
+                UPDATE dbo.amenities
+                SET is_featured = @is_featured
+                WHERE id = @id;
+
+                SELECT @@ROWCOUNT AS affectedRows;
+            `);
+
+        if (result.recordset[0].affectedRows === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy tiện nghi."
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Cập nhật trạng thái nổi bật thành công."
+        });
+
+    } catch (error) {
+        console.error("toggleAmenityFeatured Error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: "Không thể cập nhật trạng thái nổi bật."
+        });
+    }
+}
+
 module.exports = {
     getAmenitiesList,
     getAmenityCategories,
     updateAmenity,
     createAmenity,
-    toggleAmenityStatus
+    toggleAmenityStatus,
+    toggleAmenityFeatured
 };

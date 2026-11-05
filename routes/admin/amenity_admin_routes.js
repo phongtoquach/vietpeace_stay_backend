@@ -11,4 +11,8 @@ router.put("/:id", requireAdminLogin, amenityController.updateAmenity);
 
 // Bật / tắt trạng thái tiện nghi
 router.patch("/:id/status", requireAdminLogin, amenityController.toggleAmenityStatus);
+
+// Bật / tắt tiện nghi nổi bật
+router.patch("/:id/featured", requireAdminLogin, amenityController.toggleAmenityFeatured);
+
 module.exports = router;
