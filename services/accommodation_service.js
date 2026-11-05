@@ -19,6 +19,11 @@ const { formatTime, formatDateTime } = require("../utils/datetime");
 // Sinh slug + đảm bảo slug không trùng.
 const { toSlug, ensureUniqueSlug } = require("../utils/slug");
 
+// Đưa ảnh vừa upload vào folder theo id cơ sở lưu trú.
+const {
+  moveImagesIntoAccommodationFolder,
+} = require("../utils/accommodation_image_storage");
+
 // Scope ownership: ADMIN toàn hệ thống, manager theo accommodation_managers.
 const { getAccommodationScope } = require("./accommodation_access_service");
 
@@ -1158,6 +1163,16 @@ async function createAccommodation(body = {}, currentUser = {}) {
     await transaction.commit();
     console.log("[7] commit OK");
 
+    /* Ảnh upload trước khi có id nằm ở folder phẳng → chuyển vào folder id. */
+    try {
+      await moveImagesIntoAccommodationFolder(
+        newId,
+        (values.images ?? []).map((image) => image.imageUrl),
+      );
+    } catch (error) {
+      console.error("[7.1] không thể chuyển ảnh vào folder id:", error.message);
+    }
+
     const detail = await getAccommodationDetail(newId, currentUser);
     console.log("[8] trả detail id =", newId);
     return detail;
@@ -1282,6 +1297,19 @@ async function updateAccommodation(id, body = {}, currentUser = {}) {
     if (payload.status === ACCOMMODATION_STATUS.ACTIVE) await assertPublishable(transaction, accommodationId);
     await transaction.commit();
     console.log("[3] commit OK");
+
+    /* Ảnh mới upload khi sửa cũng phải nằm trong folder theo id. */
+    if (has("images")) {
+      try {
+        await moveImagesIntoAccommodationFolder(
+          accommodationId,
+          (values.images ?? []).map((image) => image.imageUrl),
+        );
+      } catch (error) {
+        console.error("[4] không thể chuyển ảnh vào folder id:", error.message);
+      }
+    }
+
     return getAccommodationDetail(accommodationId, currentUser);
   } catch (error) {
     if (transaction) {
