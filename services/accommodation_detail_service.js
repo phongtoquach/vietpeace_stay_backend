@@ -71,13 +71,22 @@ async function getAccommodationDetailById(accommodationId) {
                 aa.note AS accommodation_note
             FROM dbo.accommodation_amenities AS aa
             JOIN dbo.amenities AS am ON am.id = aa.amenity_id
-            WHERE aa.accommodation_id = @accommodationId
+            WHERE aa.accommodation_id = @accommodationId AND am.is_active = 1
             ORDER BY am.id;
+
+            SELECT aa.attraction_id, at.name, at.description, at.address_line, at.image_url,
+            aa.distance_meters, aa.note AS accommodation_note
+            FROM accommodation_attractions aa
+            JOIN attractions at ON at.id = aa.attraction_id
+            WHERE aa.accommodation_id = @accommodationId AND at.is_active = 1
+            ORDER BY at.id;
         `);
 
-    const [[accommodation], images, amenities] = result.recordsets;
+    //console.log("[getAccommodationDetailById] Data cua result.recordsets sau khi query : ", result.recordsets);
 
-    return accommodation ? { ...accommodation, images, amenities } : null;
+    const [[accommodation], images, amenities, attractions] = result.recordsets;
+
+    return accommodation ? { ...accommodation, images, amenities, attractions } : null;
 }
 
 
