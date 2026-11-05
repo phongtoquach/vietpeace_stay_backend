@@ -10,8 +10,8 @@ async function getAccommodationDetailByAccommodationId(req, res) {
         if (!/^[1-9]\d*$/.test(rawId) || accommodationId > 2147483647) {
             return res.status(400).json({
                 success: false,
-                errorCode: "DATA_INVALID",
-                errorMsg: "accommodationId phải là số nguyên dương.",
+                message: "accommodationId phải là số nguyên dương.",
+                errorCode: "DATA_INVALID"
             });
         }
 
@@ -25,8 +25,8 @@ async function getAccommodationDetailByAccommodationId(req, res) {
         if (!accommodation_data) {
             return res.status(404).json({
                 success: false,
-                errorCode: "ACCOMMODATION_NOT_FOUND",
-                errorMsg: "Không tìm thấy cơ sở lưu trú.",
+                message: "Không tìm thấy cơ sở lưu trú.",
+                errorCode: "ACCOMMODATION_NOT_FOUND"
             });
         }
 
@@ -42,8 +42,8 @@ async function getAccommodationDetailByAccommodationId(req, res) {
 
         return res.status(500).json({
             success: false,
-            errorCode: "INTERNAL_SERVER_ERROR",
-            errorMsg: "Không thể tải thông tin cơ sở lưu trú lúc này.",
+            message: "Không thể tải thông tin cơ sở lưu trú lúc này.",
+            errorCode: "INTERNAL_SERVER_ERROR"
         });
     }
 }
