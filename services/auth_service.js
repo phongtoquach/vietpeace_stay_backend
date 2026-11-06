@@ -68,12 +68,16 @@ function generatePublicUserInfo(user) {
     return {
         id: user.id,
         email: user.email,
+        personal_email: user.personal_email || null,
         full_name: user.full_name,
         display_name: user.display_name,
         phone_number: user.phone_number,
         avatar_url: user.avatar_url,
         role: user.role,
         status: user.status,
+        must_change_password: Boolean(user.must_change_password),
+        accommodationId: user.accommodationId ?? null,
+        accommodationName: user.accommodationName ?? null,
         last_login_at: user.last_login_at
     };
 }
@@ -86,20 +90,14 @@ async function login(body, audience = "web") {
     console.log("[auth_service - login()] audience : " + audience);
     
     if (!isValidBody(body)) {
-        return failure("REQUEST_BODY_INVALID","Request body không hợp lệ.");
+        return failure("REQUEST_BODY_INVALID", "Request body không hợp lệ.");
     }
 
     if (audience !== "web" && audience !== "admin") {
-        // Lỗi lập trình: controller truyền sai audience.
-        //throw new Error("Login audience không hợp lệ.");
-
-        return failure("LOGIN_AUDIENCE_INVALID","Login audience không hợp lệ");
+        return failure("LOGIN_AUDIENCE_INVALID", "Login audience không hợp lệ");
     }
 
     const { email, password, errors } = validateCredentials(body);
-    console.log("[auth_service - login()] Kết quả hàm validateCredentials() : ");
-    console.log("[auth_service - login()] email : " + email);
-    console.log("[auth_service - login()] errors : ", errors);
 
     if (Object.keys(errors).length > 0) {
         return failure("DATA_INVALID", "Dữ liệu không hợp lệ.", errors);
@@ -114,6 +112,7 @@ async function login(body, audience = "web") {
             SELECT
                 id,
                 email,
+                personal_email,
                 full_name,
                 display_name,
                 password_hash,
@@ -121,6 +120,7 @@ async function login(body, audience = "web") {
                 avatar_url,
                 role,
                 status,
+                must_change_password,
                 last_login_at
             FROM dbo.users
             WHERE email = @email;
@@ -162,7 +162,7 @@ async function login(body, audience = "web") {
     if (user.status === 2) {
         return failure(
             "ACCOUNT_INACTIVE",
-            "Tài khoản đã ngừng hoạt động."
+            "Tài khoản đã ngừng hoạt động hoặc đã bị thu hồi quyền truy cập."
         );
     }
 
@@ -174,15 +174,28 @@ async function login(body, audience = "web") {
     }
 
     const allowedRoles = LOGIN_ROLES[audience];
-    if (audience === "admin"){
-        console.log("[auth_service - login()] allowedRoles - các role được cho phép login vào Admin Panel : ", allowedRoles);
-    }
-    else {
-        console.log("[auth_service - login()] allowedRoles - các role được cho phép login vào Website đặt phòng : ", allowedRoles);
-    }
 
     if (!allowedRoles.includes(user.role)) {
         return failure("LOGIN_FORBIDDEN", "Tài khoản này không có quyền đăng nhập vào " + ((audience === "admin") ? "Hệ thống quản trị !" : "Website đặt phòng !"));
+    }
+
+    // Kiểm tra phạm vi cơ sở lưu trú của Manager
+    if (user.role === "ACCOMMODATION_MANAGER") {
+        const mgrCheck = await pool.request()
+            .input("userId", sql.UniqueIdentifier, user.id)
+            .query(`
+                SELECT m.accommodation_id, a.accommodation_name
+                FROM dbo.accommodation_managers m
+                INNER JOIN dbo.accommodations a ON a.id = m.accommodation_id AND a.deleted_at IS NULL
+                WHERE m.user_id = @userId;
+            `);
+
+        if (mgrCheck.recordset.length === 0) {
+            return failure("ACCOMMODATION_NOT_ASSIGNED", "Tài khoản của bạn chưa được phân công cơ sở lưu trú nào hoặc quyền quản lý đã bị thu hồi.");
+        }
+
+        user.accommodationId = mgrCheck.recordset[0].accommodation_id;
+        user.accommodationName = mgrCheck.recordset[0].accommodation_name;
     }
 
     const updateResult = await pool
@@ -209,12 +222,76 @@ async function getAdminUserById(userId) {
         .request()
         .input("id", sql.UniqueIdentifier, userId)
         .query(`
-            SELECT id, email, full_name, display_name, role, status
-            FROM dbo.users
+            SELECT
+                u.id,
+                u.email,
+                u.personal_email,
+                u.full_name,
+                u.display_name,
+                u.role,
+                u.status,
+                u.must_change_password,
+                m.accommodation_id AS manager_accommodation_id,
+                ma.accommodation_name AS manager_accommodation_name
+            FROM dbo.users u
+            LEFT JOIN dbo.accommodation_managers m ON m.user_id = u.id
+            LEFT JOIN dbo.accommodations ma ON ma.id = m.accommodation_id AND ma.deleted_at IS NULL
+            WHERE u.id = @id;
+        `);
+
+    const user = result.recordset[0];
+    if (!user) return null;
+
+    let isRevoked = false;
+    if (user.role === "ACCOMMODATION_MANAGER") {
+        if (!user.manager_accommodation_id) {
+            isRevoked = true;
+        } else {
+            user.accommodationId = user.manager_accommodation_id;
+            user.accommodationName = user.manager_accommodation_name;
+        }
+    }
+
+    user.isRevoked = isRevoked;
+    user.must_change_password = Boolean(user.must_change_password);
+    return user;
+}
+
+/**
+ * Đổi mật khẩu lần đầu (bắt buộc đối với tài khoản cấp phát tạm thời)
+ */
+async function changeInitialPassword(userId, newPassword) {
+    if (!newPassword || typeof newPassword !== "string" || newPassword.trim().length < 8) {
+        return failure("PASSWORD_TOO_SHORT", "Mật khẩu mới phải có ít nhất 8 ký tự.", {
+            newPassword: "Mật khẩu mới phải có ít nhất 8 ký tự."
+        });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(newPassword.trim(), salt);
+
+    const pool = getDBPool();
+    const result = await pool.request()
+        .input("id", sql.UniqueIdentifier, userId)
+        .input("passwordHash", sql.VarChar(255), passwordHash)
+        .query(`
+            UPDATE dbo.users
+            SET password_hash = @passwordHash,
+                must_change_password = 0,
+                password_change_at = SYSDATETIME(),
+                updated_at = SYSDATETIME()
+            OUTPUT INSERTED.id, INSERTED.email, INSERTED.must_change_password
             WHERE id = @id;
         `);
 
-    return result.recordset[0] ?? null;
+    if (result.recordset.length === 0) {
+        return failure("USER_NOT_FOUND", "Không tìm thấy thông tin người dùng.");
+    }
+
+    return {
+        success: true,
+        message: "Đổi mật khẩu thành công. Tài khoản của bạn đã được kích hoạt hoàn toàn."
+    };
 }
 
 /**
@@ -371,8 +448,6 @@ async function register(body) {
             error.number ??
             error.originalError?.info?.number;
 
-        // Hai request đồng thời có thể cùng vượt qua SELECT.
-        // UNIQUE constraint sẽ chặn request insert trùng email.
         if (errorNumber === 2601 || errorNumber === 2627) {
             return failure(
                 "EMAIL_ALREADY_EXISTS",
@@ -383,7 +458,6 @@ async function register(body) {
             );
         }
 
-        // Lỗi hệ thống để controller bắt.
         throw error;
     }
 }
@@ -416,5 +490,6 @@ module.exports = {
     register,
     logout,
     getAdminUserById,
+    changeInitialPassword,
     isAdminPanelRole,
 };

@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "test:handover": "node --test test/manager_handover.test.js",
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
@@ -27,6 +28,7 @@
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "mssql": "^12.7.3",
-    "multer": "^2.5.0"
+    "multer": "^2.5.0",
+    "nodemailer": "^10.3.1"
   }
 }

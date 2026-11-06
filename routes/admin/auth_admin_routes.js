@@ -6,9 +6,7 @@ const express = require("express");
 const router = express.Router();
 
 const authController = require("../../controllers/admin/auth/authController");
-
 const requireAdminLogin = require("../../middlewares/requireAdminLogin");
-
 
 /**
  * Các API public (không yêu cầu admin login)
@@ -16,13 +14,11 @@ const requireAdminLogin = require("../../middlewares/requireAdminLogin");
 router.post("/login", authController.login);
 router.post("/reset-password", authController.resetPassword);
 
-
 /**
- * Các API áp dụng middleware requireCustomerLogin (yêu cầu user login)
+ * Các API yêu cầu admin login
  */
 router.get("/loggedin-user", requireAdminLogin, authController.getLoggedInAdminUser);
+router.post("/change-initial-password", requireAdminLogin, authController.changeInitialPassword);
 router.post("/logout", requireAdminLogin, authController.logout);
 
-
-// export
 module.exports = router;
