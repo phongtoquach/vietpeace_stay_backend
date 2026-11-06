@@ -1015,6 +1015,56 @@ async function assertPublishable(transaction, accommodationId) {
 }
 
 /**
+ * R7 — cơ sở có được gán Manager đang hoạt động hay không?
+ *
+ * "Có Manager assigned" nghĩa là tồn tại dòng trong dbo.accommodation_managers
+ * nối tới tài khoản users còn hoạt động (users.status = 1). Manager bị tạm
+ * khóa (status = 2) không được tính.
+ *
+ * @param {sql.Connection|sql.Transaction} executor pool hoặc transaction
+ *   đang chạy, giúp gọi được cả trong và ngoài transaction.
+ * @returns {Promise<boolean>}
+ */
+async function hasActiveManager(executor, accommodationId) {
+  const result = await new sql.Request(executor)
+    .input("accommodationId", sql.Int, accommodationId)
+    .query(`
+      SELECT TOP 1 1 AS has_manager
+      FROM dbo.accommodation_managers m
+      JOIN dbo.users u ON u.id = m.user_id
+      WHERE m.accommodation_id = @accommodationId
+        AND u.status = 1;
+    `);
+
+  return result.recordset.length > 0;
+}
+
+/**
+ * R7 — phải có Manager đang hoạt động trước khi chuyển sang ACTIVE.
+ *
+ * Thu hồi manager qua API luôn buộc chọn manager thay thế, nên một cơ sở
+ * đã gán không thể mất trắng manager; chỉ cần chặn đường chuyển trạng thái
+ * là giữ vững bất biến "ACTIVE ⟹ có Manager đang hoạt động".
+ *
+ * Lỗi 409 kèm errors.status để form Sửa gắn thông báo đúng ô select.
+ */
+async function assertManagerAssigned(transaction, accommodationId) {
+  if (await hasActiveManager(transaction, accommodationId)) {
+    return;
+  }
+
+  throw new AccommodationServiceError(
+    "Cơ sở lưu trú chưa có người quản lý đang hoạt động.",
+    409,
+    ERROR_CODES.MANAGER_NOT_ASSIGNED,
+    {
+      status:
+        "Cần gán Manager đang hoạt động trước khi chuyển sang Đang hoạt động.",
+    },
+  );
+}
+
+/**
  * Tạo mới cơ sở lưu trú.
  *
  * @param {object} body        payload thô từ controller
@@ -1080,6 +1130,21 @@ async function createAccommodation(body = {}, currentUser = {}) {
       isFeatured: values.isFeatured ?? false,
       sortOrder: values.sortOrder ?? 0,
     };
+
+    /* Bước 6.5 — R7: cơ sở mới chưa thể có Manager (gán manager chỉ làm
+     * được sau khi cơ sở tồn tại) nên chặn luôn tạo thẳng ACTIVE. */
+    if (payload.status === ACCOMMODATION_STATUS.ACTIVE) {
+      console.log("[6.5] chặn tạo thẳng ACTIVE vì chưa thể có Manager");
+      throw new AccommodationServiceError(
+        "Cơ sở lưu trú mới chưa có người quản lý. Hãy tạo dưới dạng Bản nháp, gán Manager rồi mới kích hoạt.",
+        409,
+        ERROR_CODES.MANAGER_NOT_ASSIGNED,
+        {
+          status:
+            "Cơ sở mới chưa có Manager nên không thể tạo ở trạng thái Đang hoạt động.",
+        },
+      );
+    }
 
     const pool = getDBPool();
     transaction = new sql.Transaction(pool);
@@ -1294,6 +1359,14 @@ async function updateAccommodation(id, body = {}, currentUser = {}) {
     if (has("images")) await replaceImages(transaction, accommodationId, values.images);
     if (has("amenities")) await replaceAmenities(transaction, accommodationId, values.amenities);
     if (has("attractions")) await replaceAttractions(transaction, accommodationId, values.attractions);
+    // R7: chỉ khi CHUYỂN lên ACTIVE (từ 0/2) mới yêu cầu Manager đang hoạt động.
+    // Sửa thông tin khi đang giữ nguyên ACTIVE không phải chuyển trạng thái.
+    if (
+      payload.status === ACCOMMODATION_STATUS.ACTIVE &&
+      Number(current.status) !== ACCOMMODATION_STATUS.ACTIVE
+    ) {
+      await assertManagerAssigned(transaction, accommodationId);
+    }
     if (payload.status === ACCOMMODATION_STATUS.ACTIVE) await assertPublishable(transaction, accommodationId);
     await transaction.commit();
     console.log("[3] commit OK");
@@ -1368,6 +1441,34 @@ async function updateAccommodationStatus(id, status, currentUser = {}) {
 
     for (const input of scope.inputs) {
       request.input(input.name, input.type, input.value);
+    }
+
+    // Đọc trạng thái hiện tại trước khi UPDATE để biết đây có phải là
+    // "chuyển sang ACTIVE" hay giữ nguyên trạng thái đang có.
+    const currentResult = await request.query(`
+        SELECT a.status
+        FROM dbo.accommodations a
+        WHERE a.id = @id AND a.deleted_at IS NULL
+          AND ${scope.condition};
+      `);
+
+    if (currentResult.recordset.length === 0) {
+      throw new AccommodationServiceError(
+        "Không tìm thấy cơ sở lưu trú.",
+        404,
+        ERROR_CODES.NOT_FOUND,
+      );
+    }
+
+    const currentStatus = Number(currentResult.recordset[0].status);
+
+    // R7: chuyển sang ACTIVE yêu cầu đã gán Manager đang hoạt động.
+    // Thiếu Manager → 409, rollback và không đụng tới dữ liệu.
+    if (
+      nextStatus === ACCOMMODATION_STATUS.ACTIVE &&
+      currentStatus !== ACCOMMODATION_STATUS.ACTIVE
+    ) {
+      await assertManagerAssigned(transaction, accommodationId);
     }
 
     const result = await request.query(`
@@ -2593,6 +2694,51 @@ async function getAccommodationDetail(id, currentUser = {}) {
   detail.amenities = amenities;
   detail.attractions = attractions;
   detail.roomTypes = roomTypes;
+
+  /*
+   * Manager đang được gán cho cơ sở (mỗi cơ sở có tối đa 1 manager
+   * theo assignAccommodationManager; TOP 1 + ORDER BY là bảo hiểm).
+   *
+   * - detail.manager: object hiển thị "Người quản lý đang phụ trách",
+   *   trả cả khi tài khoản manager bị tạm khóa (status = 2).
+   * - detail.hasManager: cờ R7 để FE khóa lựa chọn "Đang hoạt động",
+   *   chỉ tính khi tài khoản còn hoạt động — khớp assertManagerAssigned.
+   */
+  const managerResult = await pool
+    .request()
+    .input("accommodationId", sql.Int, accommodationId)
+    .query(`
+        SELECT TOP 1
+            u.id AS manager_user_id,
+            u.full_name AS manager_full_name,
+            u.email AS manager_internal_email,
+            u.personal_email AS manager_personal_email,
+            u.phone_number AS manager_phone_number,
+            u.status AS manager_status,
+            m.assigned_at AS manager_assigned_at
+        FROM dbo.accommodation_managers m
+        JOIN dbo.users u ON u.id = m.user_id
+        WHERE m.accommodation_id = @accommodationId
+        ORDER BY m.assigned_at DESC;
+    `);
+
+  const managerRow = managerResult.recordset[0] ?? null;
+
+  detail.manager = managerRow
+    ? {
+        userId: managerRow.manager_user_id,
+        fullName: managerRow.manager_full_name,
+        internalEmail: managerRow.manager_internal_email,
+        personalEmail: managerRow.manager_personal_email,
+        phoneNumber: managerRow.manager_phone_number,
+        status: managerRow.manager_status,
+        isActive: Number(managerRow.manager_status) === 1,
+        assignedAt: formatDateTime(managerRow.manager_assigned_at),
+      }
+    : null;
+
+  // R7: "có Manager" chỉ đếm khi tài khoản còn hoạt động (users.status = 1).
+  detail.hasManager = Boolean(detail.manager) && detail.manager.isActive;
 
   return detail;
 }

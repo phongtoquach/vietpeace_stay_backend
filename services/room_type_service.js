@@ -1,6 +1,7 @@
 const { getDBPool, sqlObj } = require("../configs/database");
 const { ERROR_CODES } = require("../constants/error_codes");
 const { getAccommodationScope, assertAccommodationAccess } = require("./accommodation_access_service");
+const { moveImagesIntoRoomTypeFolder } = require("../utils/room_type_image_storage");
 const {
   ROOM_TYPE_STATUS_LABEL,
   ROOM_TYPE_SORT_FIELD_MAP,
@@ -1015,6 +1016,16 @@ async function createRoomType(body = {}, currentUser = {}) {
       throw mapRoomTypeSqlError(error);
     }
 
+    /* Ảnh upload trước khi có id nằm ở folder phẳng → chuyển vào folder id. */
+    try {
+      await moveImagesIntoRoomTypeFolder(
+        newId,
+        (values.images ?? []).map((image) => image.imageUrl),
+      );
+    } catch (error) {
+      console.error("[2.1] không thể chuyển ảnh vào folder id:", error.message);
+    }
+
     return await getRoomTypeDetail(newId, currentUser);
   } finally {
     console.groupEnd();
@@ -1191,6 +1202,18 @@ async function updateRoomType(id, body = {}, currentUser = {}) {
     } catch (error) {
       await transaction.rollback();
       throw mapRoomTypeSqlError(error);
+    }
+
+    /* Ảnh mới upload khi sửa cũng phải nằm trong folder theo id. */
+    if (values.images !== undefined) {
+      try {
+        await moveImagesIntoRoomTypeFolder(
+          roomTypeId,
+          (values.images ?? []).map((image) => image.imageUrl),
+        );
+      } catch (error) {
+        console.error("[2] không thể chuyển ảnh vào folder id:", error.message);
+      }
     }
 
     return await getRoomTypeDetail(roomTypeId, currentUser);
