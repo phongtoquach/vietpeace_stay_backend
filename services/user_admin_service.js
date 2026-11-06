@@ -96,56 +96,91 @@ async function createManagerUser({ fullName, personalEmail, phoneNumber }) {
     }
 
     if (!personalEmail || typeof personalEmail !== "string" || !personalEmail.includes("@")) {
-        throw { statusCode: 400, errorCode: "INVALID_EMAIL", message: "Vui lòng nhập địa chỉ Gmail cá nhân hợp lệ." };
+        throw { statusCode: 400, errorCode: "INVALID_EMAIL", message: "Vui lòng nhập địa chỉ email cá nhân hợp lệ." };
     }
 
     const pool = getDBPool();
     const cleanPersonalEmail = personalEmail.trim().toLowerCase();
-
-    // Kiểm tra trùng Gmail cá nhân
-    const existingCheck = await pool
-        .request()
-        .input("personalEmail", sql.VarChar(255), cleanPersonalEmail)
-        .query("SELECT TOP 1 id, full_name FROM dbo.users WHERE personal_email = @personalEmail OR email = @personalEmail;");
-
-    if (existingCheck.recordset.length > 0) {
-        throw {
-            statusCode: 409,
-            errorCode: "EMAIL_ALREADY_EXISTS",
-            message: `Địa chỉ Gmail "${cleanPersonalEmail}" đã được đăng ký cho nhân sự "${existingCheck.recordset[0].full_name}".`,
-        };
+    if (phoneNumber != null && typeof phoneNumber !== "string") {
+        throw { statusCode: 400, errorCode: "INVALID_PHONE", message: "Số điện thoại không hợp lệ." };
+    }
+    const cleanPhoneNumber = (phoneNumber || "").trim().replace(/[\s().-]/g, "");
+    if (cleanPhoneNumber && !/^\+?\d{8,15}$/.test(cleanPhoneNumber)) {
+        throw { statusCode: 400, errorCode: "INVALID_PHONE", message: "Vui lòng nhập số điện thoại hợp lệ (8–15 chữ số)." };
     }
 
-    // Tạo email nội bộ chờ phân công & mật khẩu khởi tạo
+    // Chuẩn hóa +84/0084 về đầu 0 để so sánh cùng một số Việt Nam.
+    const phoneKey = cleanPhoneNumber.replace(/^(?:\+84|0084)/, "0");
     const pendingInternalEmail = await generateUniqueInternalEmail("mgr", "pool");
     const initialPassword = generateTemporaryPassword(10);
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(initialPassword, salt);
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    let insertRes;
+    try {
 
-    const insertRes = await pool
-        .request()
-        .input("email", sql.VarChar(255), pendingInternalEmail)
-        .input("personalEmail", sql.VarChar(255), cleanPersonalEmail)
-        .input("fullName", sql.NVarChar(255), fullName.trim())
-        .input("displayName", sql.NVarChar(255), fullName.trim())
-        .input("passwordHash", sql.VarChar(255), passwordHash)
-        .input("phoneNumber", sql.VarChar(20), phoneNumber ? phoneNumber.trim() : null)
-        .input("role", sql.VarChar(30), "ACCOMMODATION_MANAGER")
-        .input("status", sql.TinyInt, 1)
-        .input("mustChangePassword", sql.Bit, 1)
-        .query(`
-            INSERT INTO dbo.users (
-                email, personal_email, full_name, display_name,
-                password_hash, phone_number, role, status,
-                must_change_password, email_verified_at
-            )
-            OUTPUT INSERTED.id, INSERTED.email, INSERTED.personal_email, INSERTED.full_name, INSERTED.phone_number, INSERTED.role, INSERTED.status, INSERTED.created_at
-            VALUES (
-                @email, @personalEmail, @fullName, @displayName,
-                @passwordHash, @phoneNumber, @role, @status,
-                @mustChangePassword, SYSDATETIME()
-            );
-        `);
+    // Kiểm tra trùng Gmail cá nhân
+        const existingCheck = await new sql.Request(transaction)
+            .input("personalEmail", sql.VarChar(255), cleanPersonalEmail)
+            .query("SELECT TOP 1 id, full_name FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE LOWER(LTRIM(RTRIM(personal_email))) = @personalEmail OR LOWER(LTRIM(RTRIM(email))) = @personalEmail;");
+
+        if (existingCheck.recordset.length > 0) {
+            throw {
+                statusCode: 409,
+                errorCode: "EMAIL_ALREADY_EXISTS",
+                message: `Địa chỉ email "${cleanPersonalEmail}" đã có trên hệ thống, thuộc tài khoản "${existingCheck.recordset[0].full_name}". Vui lòng sử dụng địa chỉ email khác.`,
+            };
+        }
+
+        if (phoneKey) {
+            const duplicatePhone = await new sql.Request(transaction)
+                .input("phoneKey", sql.VarChar(20), phoneKey)
+                .query(`SELECT TOP 1 u.id, u.full_name
+                    FROM dbo.users u WITH (UPDLOCK, HOLDLOCK)
+                    CROSS APPLY (SELECT REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                        u.phone_number, ' ', ''), '-', ''), '.', ''), '(', ''), ')', ''), CHAR(9), '') AS phone) p
+                    WHERE u.role = 'ACCOMMODATION_MANAGER' AND
+                        CASE WHEN p.phone LIKE '+84%' THEN '0' + SUBSTRING(p.phone, 4, 20)
+                             WHEN p.phone LIKE '0084%' THEN '0' + SUBSTRING(p.phone, 5, 20)
+                             ELSE p.phone END = @phoneKey;`);
+            if (duplicatePhone.recordset.length) {
+                throw {
+                    statusCode: 409,
+                    errorCode: "PHONE_ALREADY_EXISTS",
+                    message: `Số điện thoại "${cleanPhoneNumber}" đã có trên hệ thống, thuộc Manager "${duplicatePhone.recordset[0].full_name}". Vui lòng sử dụng số điện thoại khác.`,
+                };
+            }
+        }
+
+        insertRes = await new sql.Request(transaction)
+            .input("email", sql.VarChar(255), pendingInternalEmail)
+            .input("personalEmail", sql.VarChar(255), cleanPersonalEmail)
+            .input("fullName", sql.NVarChar(255), fullName.trim())
+            .input("displayName", sql.NVarChar(255), fullName.trim())
+            .input("passwordHash", sql.VarChar(255), passwordHash)
+            .input("phoneNumber", sql.VarChar(20), cleanPhoneNumber || null)
+            .input("role", sql.VarChar(30), "ACCOMMODATION_MANAGER")
+            .input("status", sql.TinyInt, 1)
+            .input("mustChangePassword", sql.Bit, 1)
+            .query(`
+                INSERT INTO dbo.users (
+                    email, personal_email, full_name, display_name,
+                    password_hash, phone_number, role, status,
+                    must_change_password, email_verified_at
+                )
+                OUTPUT INSERTED.id, INSERTED.email, INSERTED.personal_email, INSERTED.full_name, INSERTED.phone_number, INSERTED.role, INSERTED.status, INSERTED.created_at
+                VALUES (
+                    @email, @personalEmail, @fullName, @displayName,
+                    @passwordHash, @phoneNumber, @role, @status,
+                    @mustChangePassword, SYSDATETIME()
+                );
+            `);
+        await transaction.commit();
+    } catch (error) {
+        try { await transaction.rollback(); } catch { /* Giữ nguyên lỗi gốc. */ }
+        throw error;
+    }
 
     const row = insertRes.recordset[0];
     return {
