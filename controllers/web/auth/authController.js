@@ -1,4 +1,5 @@
 const authService = require("../../../services/auth_service");
+const userWebService = require("../../../services/user_web_service");
 
 
 async function login(req, res) {
@@ -66,30 +67,40 @@ async function login(req, res) {
 
 async function register(req, res) {
     try {
-        const { name, email, password } = req.body;
+        const result = await userWebService.register(req.body);
 
-        const customer =
-            await authService.registerCustomer(
-                name,
-                email,
-                password
-            );
+        if (!result.success) {
+            if (result.errorCode === "EMAIL_ALREADY_EXISTS") {
+                return res.status(409).json({
+                    success: false,
+                    message: "Địa chỉ Email này đã được sử dụng! Vui lòng nhập email khác!"
+                });
+            }
 
-        res.status(201).json({
+            if (result.errorCode === "DATA_INVALID") {
+                return res.status(400).json({
+                    success: false,
+                    message: result.errorMsg,
+                    errors: result.errors
+                });
+            }
+
+            throw new Error("Unexpected registration result");
+        }
+
+        return res.status(201).json({
             success: true,
             message: "Đăng ký thành công",
-
             customer: {
-                id: customer.id,
-                name: customer.name,
-                email: customer.email,
-            },
+                id: result.user.id,
+                name: result.user.full_name,
+                email: result.user.email
+            }
         });
-
     } catch (error) {
-        return res.status(302).json({
+        return res.status(500).json({
             success: false,
-            message: "Register failed"
+            message: "Không thể đăng ký lúc này. Vui lòng thử lại sau."
         });
     }
 }
