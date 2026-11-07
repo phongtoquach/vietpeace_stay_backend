@@ -7,7 +7,7 @@ const { sqlObj, getDBPool } = require("../configs/database");
 const SORT_OPTIONS = {
 	default: `
 		is_featured DESC,
-		id ASC
+		id DESC
 	`,
 
 	price_asc: `
