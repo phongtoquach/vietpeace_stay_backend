@@ -250,6 +250,7 @@ function normalizeFilters(filters) {
 	}
 
 	if (normalized.checkinDate && normalized.checkoutDate) {
+		if ((Date.parse(normalized.checkoutDate) - Date.parse(normalized.checkinDate)) / 86400000 > 90) errors.checkoutDate = "Kỳ lưu trú tối đa 90 đêm.";
 		if (normalized.checkoutDate <= normalized.checkinDate) {
 			errors.checkoutDate = "checkoutDate phải sau checkinDate.";
 		}
@@ -527,135 +528,12 @@ async function searchAccommodationsByFilters(filters = {}, sort = "default", pag
 	// ----------------------------------------------------------
 
 	const inventoryCtes = hasDates
-		? `
-		-- Mỗi dòng booking_items tương ứng một phòng.
-		-- Chỉ lấy booking CONFIRMED giao với kỳ tìm kiếm.
-		OverlappingBookings AS (
-			SELECT
-			rt.id AS room_type_id,
-
-			CASE
-				WHEN b.check_in_date < @stayStart
-				THEN @stayStart
-				ELSE b.check_in_date
-			END AS start_date,
-
-			CASE
-				WHEN b.check_out_date > @stayEnd
-				THEN @stayEnd
-				ELSE b.check_out_date
-			END AS end_date,
-
-			COUNT_BIG(*) AS booked_rooms
-
-			FROM ActiveRoomTypes AS rt
-
-			INNER JOIN dbo.booking_items AS bi
-			ON bi.room_type_id = rt.id
-
-			INNER JOIN dbo.bookings AS b
-			ON b.id = bi.booking_id
-			AND b.accommodation_id = rt.accommodation_id
-
-			WHERE b.status = 'CONFIRMED'
-			AND b.check_in_date < @stayEnd
-			AND b.check_out_date > @stayStart
-
-			GROUP BY
-			rt.id,
-			b.check_in_date,
-			b.check_out_date
-		),
-
-		-- Checkin tăng, checkout giảm số phòng bị chiếm.
-		BookingEvents AS (
-			SELECT
-			room_type_id,
-			start_date AS event_date,
-			booked_rooms AS delta
-			FROM OverlappingBookings
-
-			UNION ALL
-
-			SELECT
-			room_type_id,
-			end_date AS event_date,
-			-booked_rooms AS delta
-			FROM OverlappingBookings
-		),
-
-		-- Gộp checkin và checkout cùng ngày trước khi cộng dồn.
-		DailyEvents AS (
-			SELECT
-			room_type_id,
-			event_date,
-			SUM(delta) AS delta
-
-			FROM BookingEvents
-
-			GROUP BY
-			room_type_id,
-			event_date
-		),
-
-		-- Số phòng bị chiếm sau mỗi mốc biến động.
-		RunningOccupancy AS (
-			SELECT
-			room_type_id,
-			event_date,
-
-			SUM(delta) OVER (
-				PARTITION BY room_type_id
-				ORDER BY event_date
-				ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-			) AS occupied_rooms
-
-			FROM DailyEvents
-		),
-
-		-- Cao điểm số phòng bị chiếm trong kỳ lưu trú.
-		PeakOccupancy AS (
-			SELECT
-			room_type_id,
-			MAX(occupied_rooms) AS peak_rooms
-
-			FROM RunningOccupancy
-
-			WHERE event_date < @stayEnd
-
-			GROUP BY room_type_id
-		),
-
-		-- Phòng trống xuyên suốt kỳ lưu trú của từng room type.
-		RoomInventory AS (
-			SELECT
-			rt.id,
-			rt.accommodation_id,
-			rt.base_price,
-
-			CASE
-				WHEN rt.quantity > COALESCE(p.peak_rooms, 0)
-				THEN rt.quantity - COALESCE(p.peak_rooms, 0)
-				ELSE CAST(0 AS BIGINT)
-			END AS available_rooms
-
-			FROM ActiveRoomTypes AS rt
-
-			LEFT JOIN PeakOccupancy AS p
-			ON p.room_type_id = rt.id
-		),
-		`
-		: `
-			RoomInventory AS (
-				SELECT
-				id,
-				accommodation_id,
-				base_price,
-				CAST(NULL AS BIGINT) AS available_rooms
-
-				FROM ActiveRoomTypes
-			),
-		`;
+ ? `StayDates AS (
+ SELECT DATEADD(day,n.n,@stayStart) AS stay_date FROM (SELECT TOP(1096) ROW_NUMBER() OVER(ORDER BY (SELECT NULL))-1 AS n FROM sys.all_objects) n WHERE n.n<DATEDIFF(day,@stayStart,@stayEnd)
+ ), RoomInventory AS (
+ SELECT rt.id,rt.accommodation_id,AVG(f.effective_price) AS base_price,MIN(f.available_to_sell) AS available_rooms FROM ActiveRoomTypes rt CROSS JOIN StayDates d CROSS APPLY dbo.fn_room_daily_offer(rt.id,d.stay_date) f GROUP BY rt.id,rt.accommodation_id
+ ),`
+ : `RoomInventory AS (SELECT id,accommodation_id,base_price,CAST(NULL AS BIGINT) AS available_rooms FROM ActiveRoomTypes),`;
 
 	// ----------------------------------------------------------
 	// 5. Lọc sau khi đã tính tồn phòng và giá thấp nhất

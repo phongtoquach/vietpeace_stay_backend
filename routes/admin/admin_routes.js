@@ -73,4 +73,6 @@ router.use("/attractions", requireAdminLogin, attractionAdminRoutes);
 const amenityAdminRoutes = require("./amenity_admin_routes");
 router.use("/amenities", requireAdminLogin, amenityAdminRoutes);
 
+router.use('/pricing', requireAdminLogin, require('./pricing_admin_routes'));
+
 module.exports = router;

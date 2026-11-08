@@ -97,6 +97,7 @@ async function loadRoomData(pool, accommodationId, stay) {
         .input("accommodationId", sqlObj.Int, accommodationId)
         .input("checkin", sqlObj.VarChar(10), stay.checkinDate)
         .input("checkout", sqlObj.VarChar(10), stay.checkoutDate)
+        .input("stayDates", sqlObj.NVarChar(sqlObj.MAX), JSON.stringify(stay.nights.map(n=>n.stayDate)))
         .query(`
             DECLARE @start date = CONVERT(date, @checkin, 23);
             DECLARE @end date = CONVERT(date, @checkout, 23);
@@ -140,46 +141,6 @@ async function loadRoomData(pool, accommodationId, stay) {
             ORDER BY rt.sort_order, rt.id;
 
             SELECT
-                bi.room_type_id AS roomTypeId,
-                CONVERT(char(10), b.check_in_date, 23) AS checkinDate,
-                CONVERT(char(10), b.check_out_date, 23) AS checkoutDate,
-                COUNT_BIG(*) AS bookedQuantity
-            FROM dbo.bookings AS b
-            JOIN dbo.booking_items AS bi ON bi.booking_id = b.id
-            JOIN #ActiveRoomTypes AS active ON active.id = bi.room_type_id
-            WHERE b.accommodation_id = @accommodationId
-              AND b.status = 'CONFIRMED'
-              AND b.check_in_date < @end
-              AND b.check_out_date > @start
-            GROUP BY bi.room_type_id, b.check_in_date, b.check_out_date;
-
-            SELECT
-                r.room_type_id AS roomTypeId,
-                r.day_of_week AS dayOfWeek,
-                r.price
-            FROM dbo.room_weekday_rates AS r
-            JOIN #ActiveRoomTypes AS active ON active.id = r.room_type_id;
-
-            SELECT
-                r.room_type_id AS roomTypeId,
-                CONVERT(char(10), p.start_date, 23) AS startDate,
-                CONVERT(char(10), p.end_date, 23) AS endDate,
-                r.adjustment_type AS adjustmentType,
-                r.adjustment_value AS adjustmentValue
-            FROM dbo.room_period_rates AS r
-            JOIN #ActiveRoomTypes AS active ON active.id = r.room_type_id
-            JOIN dbo.accommodation_rate_periods AS ar
-                ON ar.id = r.accommodation_rate_period_id
-            JOIN dbo.rate_periods AS p ON p.id = ar.rate_period_id
-            WHERE ar.accommodation_id = @accommodationId
-              AND ar.is_active = 1
-              AND p.is_active = 1
-              AND p.deleted_at IS NULL
-              AND p.start_date < @end
-              AND p.end_date > @start
-            ORDER BY p.start_date DESC, p.id DESC;
-
-            SELECT
                 i.room_type_id AS roomTypeId,
                 i.id AS image_id,
                 i.image_url,
@@ -205,6 +166,9 @@ async function loadRoomData(pool, accommodationId, stay) {
             JOIN dbo.amenities AS am ON am.id = ra.amenity_id
             ORDER BY ra.room_type_id, am.id;
 
+            SELECT f.* FROM #ActiveRoomTypes active
+            CROSS JOIN OPENJSON(@stayDates) WITH(stay_date date '$') d
+            CROSS APPLY dbo.fn_room_daily_offer(active.id,d.stay_date) f;
             DROP TABLE #ActiveRoomTypes;
             DROP TABLE #ActiveAccommodation;
         `);
@@ -214,95 +178,23 @@ async function loadRoomData(pool, accommodationId, stay) {
     return accommodationRows.length > 0 ? roomRecordsets : null;
 }
 
-function calculateNightPrice(basePrice, weekdayPrice, period) {
-    const normalPrice = toCents(weekdayPrice ?? basePrice);
-
-    if (!period) {
-        return normalPrice;
-    }
-
-    const adjustment = Number(period.adjustmentValue);
-    const type = String(period.adjustmentType).trim().toLowerCase();
-
-    switch (type) {
-        case "fixed_price":
-            return toCents(adjustment);
-
-        case "increase_percent":
-            return Math.round(normalPrice * (1 + adjustment / 100));
-
-        case "decrease_percent":
-            return Math.round(normalPrice * (1 - adjustment / 100));
-
-        case "increase_amount":
-            return normalPrice + toCents(adjustment);
-
-        case "decrease_amount": {
-            const price = normalPrice - toCents(adjustment);
-
-            if (price <= 0) {
-                throw new Error("Giá đêm sau khi giảm theo rate period phải lớn hơn 0.");
-            }
-
-            return price;
-        }
-
-        default:
-            throw new Error(`Loại điều chỉnh giá không hợp lệ: ${type}`);
-    }
-}
-
 function buildRoomTypes(recordsets, stay) {
-    const [roomRows, bookedRows, weekdayRows, periodRows, imageRows, amenityRows] =
-        recordsets;
-
-    const bookings = groupRows(bookedRows, "roomTypeId");
-    const weekdays = groupRows(weekdayRows, "roomTypeId");
-    const periods = groupRows(periodRows, "roomTypeId");
+    const [roomRows, imageRows, amenityRows, offerRows] = recordsets;
+    const dailyOffers = new Map((offerRows || []).map(c => [c.room_type_id + ":" + c.stay_date.toISOString().slice(0,10), c]));
     const images = groupRows(imageRows, "roomTypeId");
     const amenities = groupRows(amenityRows, "roomTypeId");
-
     return roomRows.map(room => {
-        const roomBookings = bookings.get(room.id) ?? [];
-        const weekdayRates = weekdays.get(room.id) ?? [];
-        const periodRates = periods.get(room.id) ?? [];
-
-        let maxBooked = 0;
-        let roomSubtotalInCents = 0;
-
-        const nightlyRates = stay.nights.map(({ stayDate, dayOfWeek }) => {
-            const bookedOnNight = roomBookings.reduce((sum, booking) => {
-                if (booking.checkinDate <= stayDate && stayDate < booking.checkoutDate) {
-                    return sum + Number(booking.bookedQuantity);
-                }
-
-                return sum;
-            }, 0);
-
-            maxBooked = Math.max(maxBooked, bookedOnNight);
-
-            const weekdayPrice = weekdayRates.find(
-                rate => rate.dayOfWeek === dayOfWeek
-            )?.price;
-
-            const period = periodRates.find(
-                rate => rate.startDate <= stayDate && stayDate < rate.endDate
-            );
-
-            const price = calculateNightPrice(room.basePrice, weekdayPrice, period);
-            roomSubtotalInCents += price;
-
-            return { stayDate, price: fromCents(price) };
+        let minAvailable = room.quantity;
+        let subtotal = 0;
+        const nightlyRates = stay.nights.map(({stayDate}) => {
+            const offer = dailyOffers.get(room.id + ":" + stayDate);
+            if (!offer || Number(offer.effective_price) <= 0) throw new Error("Invalid nightly rate.");
+            minAvailable = Math.min(minAvailable, Number(offer.available_to_sell));
+            subtotal += toCents(offer.effective_price);
+            return {stayDate, price:Number(offer.effective_price)};
         });
-
-        return {
-            ...room,
-            availableQuantity: Math.max(0, room.quantity - maxBooked),
-            roomSubtotal: fromCents(roomSubtotalInCents),
-            nightlyRates,
-            images: images.get(room.id) ?? [],
-            amenities: amenities.get(room.id) ?? [],
-        };
+        return {...room, availableQuantity:Math.max(0,minAvailable),roomSubtotal:fromCents(subtotal),nightlyRates,
+            images:images.get(room.id)??[],amenities:amenities.get(room.id)??[]};
     });
 }
 
