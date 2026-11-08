@@ -103,27 +103,6 @@ async function getLoggedInUser(req, res) {
             customerInfo: req.session.customer
         }
     });
-
-    try {
-        const customerId =
-            req.session.customer.id;
-
-        const customer =
-            await authService.getCustomerById(
-                customerId
-            );
-
-        res.json({
-            success: true,
-            customer,
-        });
-
-    } catch (error) {
-        return res.status(404).json({
-            success: false,
-            message: "Loggedin user not found !"
-        });
-    }
 }
 
 

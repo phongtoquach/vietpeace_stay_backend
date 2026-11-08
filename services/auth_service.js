@@ -485,6 +485,49 @@ async function logout(session) {
     };
 }
 
+
+/**
+ * Hàm này lấy data thông tin của customer (bảng users) theo param userId được truyền vào
+ */
+async function getCustomerDataById(userId) {
+    const pool = getDBPool();
+
+    const result = await pool
+        .request()
+        .input("id", sql.UniqueIdentifier, userId)
+        .query(`
+            SELECT u.id, u.email, u.full_name, u.display_name, u.phone_number, u.role, u.status
+            FROM users u
+            WHERE u.id = @id;
+        `);
+
+    if (result.recordset.length === 0) {
+        return failure(
+            "USER_NOT_EXISTED",
+            "User không tồn tại trong hệ thống."
+        );
+    }
+
+    const userRow = result.recordset[0];
+    console.log("[auth_service - getCustomerDataById()] Data cua user tim duoc : ", userRow);
+
+    // chi chap nhan user co role la CUSTOMER
+    if (userRow.role !== "CUSTOMER") {
+        return failure(
+            "ACCOUNT_IS_NOT_CUSTOMER",
+            "Tài khoản này không phải là tài khoản Customer !"
+        );
+    }
+
+    return {
+        success: true,
+        data: {
+            customer: userRow
+        }
+    }; 
+}
+
+
 module.exports = {
     login,
     register,
@@ -492,4 +535,5 @@ module.exports = {
     getAdminUserById,
     changeInitialPassword,
     isAdminPanelRole,
+    getCustomerDataById
 };
