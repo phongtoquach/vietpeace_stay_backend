@@ -1,6 +1,8 @@
 // Customer Web registration. Shared authentication keeps a compatibility export.
 const sql = require("mssql");
 const bcrypt = require("bcryptjs");
+const crypto = require("node:crypto");
+const { createVerificationSender } = require("./email_service");
 const { getDBPool } = require("../configs/database");
 const EMAIL_REGEX = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
@@ -213,9 +215,32 @@ async function register(body) {
                 );
             `);
 
+        const user = result.recordset[0];
+        let emailSent = false;
+        try {
+            const send = createVerificationSender();
+            const token = crypto.randomBytes(32).toString("hex");
+            const hash = crypto.createHash("sha256").update(token).digest("hex");
+            await pool.request()
+                .input("user_id", sql.UniqueIdentifier, user.id)
+                .input("email", sql.VarChar(255), user.email)
+                .input("token_hash", sql.Char(150), hash)
+                .query(`
+                    DECLARE @now datetime2 = SYSUTCDATETIME();
+                    INSERT INTO dbo.email_verification_tokens
+                        (user_id, email, token_hash, expires_at, created_at)
+                    VALUES (@user_id, @email, @token_hash, DATEADD(HOUR, 24, @now), @now);
+                `);
+            await send(user.email, token);
+            emailSent = true;
+        } catch {
+            // User INSERT already succeeded. Keep status 0 and never claim mail was sent.
+            // No raw SMTP/database errors or tokens are included in logs or responses.
+        }
         return {
             success: true,
-            user: generatePublicUserInfo(result.recordset[0]),
+            user: generatePublicUserInfo(user),
+            verification: { required: true, emailSent }
         };
     } catch (error) {
         // Verified on VietPeaceStay.dbo.users: unfiltered UNIQUE key on email.
@@ -246,4 +271,58 @@ async function register(body) {
     }
 }
 
-module.exports = { register };
+async function verifyEmail(token) {
+    if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) return false;
+    const hash = crypto.createHash("sha256").update(token).digest("hex");
+    const tx = new sql.Transaction(getDBPool());
+    await tx.begin();
+    try {
+        const candidate = await new sql.Request(tx)
+            .input("token_hash", sql.Char(150), hash)
+            .query(`SELECT user_id FROM dbo.email_verification_tokens WHERE token_hash = @token_hash;`);
+        if (!candidate.recordset.length) {
+            await tx.commit();
+            return false;
+        }
+        const userId = candidate.recordset[0].user_id;
+        // Serialize verification for a user, including requests with different tokens.
+        const user = await new sql.Request(tx)
+            .input("user_id", sql.UniqueIdentifier, userId)
+            .query(`SELECT id FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
+                WHERE id = @user_id AND role = 'CUSTOMER' AND status = 0;`);
+        if (!user.recordset.length) {
+            await tx.commit();
+            return false;
+        }
+        const consumed = await new sql.Request(tx)
+            .input("user_id", sql.UniqueIdentifier, userId)
+            .input("token_hash", sql.Char(150), hash)
+            .query(`
+                DECLARE @now datetime2 = SYSUTCDATETIME();
+                UPDATE t SET used_at = @now
+                OUTPUT INSERTED.id
+                FROM dbo.email_verification_tokens t
+                JOIN dbo.users u ON u.id = t.user_id AND u.email = t.email
+                WHERE t.user_id = @user_id AND t.token_hash = @token_hash
+                    AND t.used_at IS NULL AND t.revoked_at IS NULL
+                    AND t.expires_at > @now AND t.created_at <= @now;
+            `);
+        if (!consumed.recordset.length) {
+            await tx.commit();
+            return false;
+        }
+        const activated = await new sql.Request(tx)
+            .input("user_id", sql.UniqueIdentifier, userId)
+            .query(`UPDATE dbo.users SET status = 1
+                OUTPUT INSERTED.id
+                WHERE id = @user_id AND role = 'CUSTOMER' AND status = 0;`);
+        if (activated.recordset.length !== 1) throw new Error("Account activation failed");
+        await tx.commit();
+        return true;
+    } catch (error) {
+        try { await tx.rollback(); } catch { /* Preserve original failure. */ }
+        throw error;
+    }
+}
+
+module.exports = { register, verifyEmail };

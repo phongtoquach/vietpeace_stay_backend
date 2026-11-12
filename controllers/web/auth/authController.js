@@ -90,7 +90,10 @@ async function register(req, res) {
 
         return res.status(201).json({
             success: true,
-            message: "Đăng ký thành công",
+            message: result.verification.emailSent
+                ? "Đăng ký thành công. Vui lòng kiểm tra email để xác minh tài khoản."
+                : "Tài khoản đã được tạo nhưng chưa gửi được email xác minh. Tài khoản chưa được kích hoạt. Vui lòng liên hệ hỗ trợ.",
+            verification: result.verification,
             customer: {
                 id: result.user.id,
                 name: result.user.full_name,

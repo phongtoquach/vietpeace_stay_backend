@@ -24,11 +24,11 @@ function setup(query) {
         const inputs = {};
         return {
             input(name, type, value) { inputs[name] = value; return this; },
-            query(text) { return query(text, inputs); }
+            query(text) { if (text.includes('INSERT INTO dbo.email_verification_tokens')) return Promise.resolve({ recordset: [] }); return query(text, inputs); }
         };
     } };
     const service = load('services/user_web_service.js', {
-        mssql: sql, bcryptjs: bcrypt, '../configs/database': { getDBPool: () => pool }
+        mssql: sql, bcryptjs: bcrypt, 'node:crypto': require('node:crypto'), './email_service': { createVerificationSender: () => async () => {} }, '../configs/database': { getDBPool: () => pool }
     });
     const controller = load('controllers/web/auth/authController.js', {
         '../../../services/auth_service': {},
@@ -65,7 +65,7 @@ test('new account: bcrypt 12, backend CUSTOMER/status 0, safe 201', async () => 
     });
     const res = await app.request();
     assert.equal(res.code, 201);
-    assert.deepEqual(res.body, { success: true, message: 'Đăng ký thành công', customer: { id: 'new', name: body.full_name, email: 'person@example.com' } });
+    assert.deepEqual(res.body, { success: true, message: 'Đăng ký thành công. Vui lòng kiểm tra email để xác minh tài khoản.', verification: { required: true, emailSent: true }, customer: { id: 'new', name: body.full_name, email: 'person@example.com' } });
 });
 for (const number of [2601, 2627]) {
     test(`concurrent inserts: simulated email UNIQUE ${number}`, async () => {

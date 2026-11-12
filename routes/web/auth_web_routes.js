@@ -15,6 +15,7 @@ const requireCustomerLogin = require("../../middlewares/requireCustomerLogin");
  */
 router.post("/login", authController.login);
 router.post("/register", authController.register);
+router.post("/verify-email", require("../../controllers/web/auth/emailVerificationController").verify);
 router.post("/reset-password", authController.resetPassword);
 
 
